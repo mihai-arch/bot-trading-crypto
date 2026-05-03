@@ -7,6 +7,7 @@ All thresholds and limits are configurable without code changes.
 """
 
 from decimal import Decimal
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -72,4 +73,14 @@ class BITConfig(BaseSettings):
     monitor_threshold: Decimal = Field(
         default=Decimal("0.40"),
         description="Composite score at or above which DecisionEngine emits MONITOR.",
+    )
+
+    # ── Runner / scheduler ────────────────────────────────────────────────────
+    run_interval_seconds: int = Field(
+        default=60,
+        description="Seconds to sleep between pipeline cycle completions.",
+    )
+    heartbeat_path: Path = Field(
+        default=Path("data/heartbeat.json"),
+        description="Path for the runner heartbeat JSON file. Written after each cycle.",
     )

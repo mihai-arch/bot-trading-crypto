@@ -33,6 +33,7 @@ class HealthChecker:
         config: BITConfig,
         journal_path: Path,
         project_root: Path = Path("."),
+        runner_running: bool = False,
     ) -> list[HealthItem]:
         """Return one HealthItem per service, in pipeline order."""
         return [
@@ -43,7 +44,7 @@ class HealthChecker:
             self._probe_risk_engine(),
             self._probe_execution_engine(config),
             self._probe_journal(journal_path),
-            self._probe_scheduler(),
+            self._probe_scheduler(runner_running),
             self._probe_docker(project_root),
         ]
 
@@ -133,13 +134,19 @@ class HealthChecker:
         )
 
     @staticmethod
-    def _probe_scheduler() -> HealthItem:
+    def _probe_scheduler(runner_running: bool = False) -> HealthItem:
+        if runner_running:
+            return HealthItem(
+                name="Scheduler / Loop",
+                status=ServiceStatus.IMPLEMENTED,
+                detail="BotRunner is active — pipeline.run(symbol) is called on a fixed interval.",
+            )
         return HealthItem(
             name="Scheduler / Loop",
             status=ServiceStatus.MISSING,
             detail=(
-                "No run loop exists. pipeline.run(symbol) must be called manually "
-                "per cycle. Continuous paper trading is not possible yet."
+                "BotRunner is not running. Start with: python -m bit. "
+                "pipeline.run(symbol) is never called automatically without an active runner."
             ),
         )
 

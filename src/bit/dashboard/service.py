@@ -12,9 +12,12 @@ No fake data. Fields that cannot be populated are None or empty.
 Callers (templates, JSON endpoint) must handle None explicitly.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..config import BITConfig
 from ..domain.journal import JournalEntry
@@ -28,9 +31,13 @@ from .models import (
     PortfolioSummary,
     PositionRow,
     RiskConfig,
+    RunnerInfo,
     RuntimeGap,
 )
 from .readiness import ReadinessEvaluator
+
+if TYPE_CHECKING:
+    from ..runner import RunnerState, RunnerStatus
 
 _MAX_RECENT = 20
 
@@ -95,22 +102,24 @@ def _collect_fills(entries: list[JournalEntry]) -> list[FillRow]:
 def _build_runtime_gaps(
     config: BITConfig,
     portfolio: PaperPortfolioTracker | None,
+    runner_running: bool = False,
 ) -> list[RuntimeGap]:
     """
     Build the known runtime gaps list.
 
-    These are always shown — they represent the honest current state of the
-    project and what is still needed before continuous paper trading works.
+    These represent the honest current state of the project and what is still
+    needed before continuous paper trading works. Resolved gaps are omitted.
     """
-    gaps: list[RuntimeGap] = [
-        RuntimeGap(
+    gaps: list[RuntimeGap] = []
+
+    if not runner_running:
+        gaps.append(RuntimeGap(
             label="No scheduler / run loop",
             detail=(
-                "pipeline.run(symbol) is never called automatically. "
-                "A Runner / async loop must be added to start paper trading continuously."
+                "BotRunner is not active. Start with: python -m bit. "
+                "pipeline.run(symbol) is never called automatically without it."
             ),
-        ),
-    ]
+        ))
 
     if portfolio is None:
         gaps.append(RuntimeGap(
@@ -177,11 +186,13 @@ class DashboardService:
         journal: JournalLearningStore,
         portfolio: PaperPortfolioTracker | None = None,
         project_root: Path | None = None,
+        runner_state: RunnerState | None = None,
     ) -> None:
         self._config = config
         self._journal = journal
         self._portfolio = portfolio
         self._project_root = project_root or Path(".")
+        self._runner_state = runner_state
         self._health = HealthChecker()
         self._readiness = ReadinessEvaluator()
 
@@ -236,11 +247,29 @@ class DashboardService:
             paper_slippage_pct=self._config.paper_slippage_pct,
         )
 
+        # ── Runner state ───────────────────────────────────────────────────────
+        rs = self._runner_state
+        runner_running = rs is not None and str(rs.status) == "running"
+        runner_info: RunnerInfo | None = None
+        if rs is not None:
+            runner_info = RunnerInfo(
+                status=str(rs.status),
+                mode=rs.mode,
+                last_heartbeat=rs.last_heartbeat,
+                last_cycle_start=rs.last_cycle_start,
+                last_cycle_end=rs.last_cycle_end,
+                last_successful_cycle=rs.last_successful_cycle,
+                last_error_message=rs.last_error_message,
+                last_error_time=rs.last_error_time,
+                symbols_last_cycle=list(rs.symbols_last_cycle),
+            )
+
         # ── Health + readiness ─────────────────────────────────────────────────
         health_items = self._health.probe_all(
             config=self._config,
             journal_path=self._journal.path,
             project_root=self._project_root,
+            runner_running=runner_running,
         )
         readiness_items = self._readiness.evaluate(
             config=self._config,
@@ -248,8 +277,9 @@ class DashboardService:
             portfolio_available=self._portfolio is not None,
             journal_path=self._journal.path,
             project_root=self._project_root,
+            runner_running=runner_running,
         )
-        runtime_gaps = _build_runtime_gaps(self._config, self._portfolio)
+        runtime_gaps = _build_runtime_gaps(self._config, self._portfolio, runner_running)
 
         return DashboardSnapshot(
             mode="PAPER" if self._config.paper_trading else "LIVE",
@@ -257,8 +287,9 @@ class DashboardService:
             as_of=datetime.now(tz=timezone.utc),
             last_journal_write=last_entry.cycle_timestamp if last_entry else None,
             last_pipeline_run=last_entry.cycle_timestamp if last_entry else None,
-            loop_running=False,
+            loop_running=runner_running,
             journal_entry_count=len(entries),
+            runner=runner_info,
             portfolio=portfolio_summary,
             risk_config=risk_config,
             open_positions=positions,

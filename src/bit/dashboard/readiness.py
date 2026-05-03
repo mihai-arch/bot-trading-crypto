@@ -35,6 +35,7 @@ class ReadinessEvaluator:
         portfolio_available: bool,
         journal_path: Path,
         project_root: Path = Path("."),
+        runner_running: bool = False,
     ) -> list[ReadinessItem]:
         """Return one ReadinessItem per check, in priority order."""
         return [
@@ -42,7 +43,7 @@ class ReadinessEvaluator:
             self._check_portfolio(portfolio_available),
             self._check_journal_writable(journal_path),
             self._check_api_key(config),
-            self._check_scheduler(),
+            self._check_scheduler(runner_running),
             self._check_market_connectivity(config),
             self._check_journal_has_data(journal_entry_count),
             self._check_docker(project_root),
@@ -126,14 +127,21 @@ class ReadinessEvaluator:
         )
 
     @staticmethod
-    def _check_scheduler() -> ReadinessItem:
+    def _check_scheduler(runner_running: bool = False) -> ReadinessItem:
+        if runner_running:
+            return ReadinessItem(
+                key="scheduler",
+                label="Runner / loop is active",
+                status=ReadinessStatus.READY,
+                detail="BotRunner is running — pipeline cycles are executing on a fixed interval.",
+            )
         return ReadinessItem(
             key="scheduler",
-            label="Scheduler / loop not running",
+            label="Runner / loop not running",
             status=ReadinessStatus.MISSING,
             detail=(
-                "No run loop exists. Paper trading cannot run continuously "
-                "until a scheduler that calls pipeline.run(symbol) is added."
+                "No run loop is active. Start the scheduler with: python -m bit. "
+                "Paper trading cannot run continuously until the runner is started."
             ),
         )
 

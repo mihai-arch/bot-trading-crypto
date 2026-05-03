@@ -14,7 +14,10 @@ It has no access to the pipeline's in-memory portfolio tracker — the portfolio
 section will show N/A unless create_app() is used with an injected tracker.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -24,6 +27,9 @@ from ..config import BITConfig
 from ..services.journal import JournalLearningStore
 from ..services.paper_portfolio import PaperPortfolioTracker
 from .service import DashboardService
+
+if TYPE_CHECKING:
+    from ..runner import RunnerState
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -72,24 +78,30 @@ def create_app(
     journal: JournalLearningStore,
     portfolio: PaperPortfolioTracker | None = None,
     project_root: Path | None = None,
+    runner_state: RunnerState | None = None,
 ) -> FastAPI:
     """
     Create and configure the dashboard FastAPI app.
 
     Args:
-        config:       BITConfig instance. Share with the pipeline when possible.
-        journal:      JournalLearningStore instance. Share with the pipeline.
-        portfolio:    Optional PaperPortfolioTracker. Must be the SAME instance
-                      used by the pipeline to see live in-memory state.
-                      Pass None if running the dashboard standalone.
-        project_root: Directory to search for docker-compose files.
-                      Defaults to Path(".").
+        config:        BITConfig instance. Share with the pipeline when possible.
+        journal:       JournalLearningStore instance. Share with the pipeline.
+        portfolio:     Optional PaperPortfolioTracker. Must be the SAME instance
+                       used by the pipeline to see live in-memory state.
+                       Pass None if running the dashboard standalone.
+        project_root:  Directory to search for docker-compose files.
+                       Defaults to Path(".").
+        runner_state:  Optional RunnerState from BotRunner. Must be the SAME
+                       instance used by the runner for live state visibility.
+                       When provided, loop_running and scheduler items reflect
+                       actual runner status instead of hardcoded MISSING.
     """
     service = DashboardService(
         config=config,
         journal=journal,
         portfolio=portfolio,
         project_root=project_root,
+        runner_state=runner_state,
     )
 
     app = FastAPI(

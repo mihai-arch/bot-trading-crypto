@@ -117,6 +117,25 @@ class RuntimeGap(BaseModel):
     detail: str   # Explanation and suggested action
 
 
+class RunnerInfo(BaseModel):
+    """
+    Live runtime state from BotRunner for dashboard display.
+
+    Populated when the dashboard shares a RunnerState with the runner process.
+    None when the runner has not been started or is not wired into the dashboard.
+    """
+
+    status: str                             # "running" | "stopped" | "error"
+    mode: str                               # "PAPER" | "LIVE"
+    last_heartbeat: datetime | None
+    last_cycle_start: datetime | None
+    last_cycle_end: datetime | None
+    last_successful_cycle: datetime | None
+    last_error_message: str | None
+    last_error_time: datetime | None
+    symbols_last_cycle: list[str]
+
+
 class DashboardSnapshot(BaseModel):
     """
     Complete dashboard state snapshot.
@@ -133,8 +152,9 @@ class DashboardSnapshot(BaseModel):
     as_of: datetime                         # When this snapshot was built (UTC)
     last_journal_write: datetime | None     # Most recent JournalEntry.cycle_timestamp
     last_pipeline_run: datetime | None      # Same as last_journal_write in v1
-    loop_running: bool = False              # Always False until a scheduler is added
+    loop_running: bool = False              # True when BotRunner is active
     journal_entry_count: int
+    runner: RunnerInfo | None = None        # Live runner state; None if not wired
 
     # ── Sections ──────────────────────────────────────────────────────────────
     portfolio: PortfolioSummary | None      # None if tracker not injected into dashboard
