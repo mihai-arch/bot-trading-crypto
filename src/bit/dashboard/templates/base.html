@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BIT Dashboard</title>
+  <style>
+    /* ── Design tokens ─────────────────────────────────────────────── */
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --surface2: #1c2128;
+      --border:   #30363d;
+      --line:     #21262d;
+      --text:     #e6edf3;
+      --dim:      #8b949e;
+      --green:    #3fb950;
+      --yellow:   #d29922;
+      --red:      #f85149;
+      --blue:     #58a6ff;
+      --font:     'Consolas', 'Courier New', monospace;
+      --fs:       12px;
+    }
+
+    /* ── Reset ─────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: var(--fs);
+      line-height: 1.5;
+    }
+
+    /* ── Header ────────────────────────────────────────────────────── */
+    .hdr {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 6px 14px;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .hdr-title { font-weight: bold; font-size: 14px; letter-spacing: .06em; color: var(--blue); }
+    .hdr-sep   { color: var(--border); }
+    .hdr-dim   { color: var(--dim); }
+
+    /* ── Badges ────────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 2px;
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: .04em;
+    }
+    .b-paper    { background: #1f3a5c; color: var(--blue); }
+    .b-live     { background: #3d1a1a; color: var(--red); }
+    .b-loop-off { background: #2a1a1a; color: var(--red); }
+    .b-loop-on  { background: #1a2d1a; color: var(--green); }
+
+    /* ── Main content ──────────────────────────────────────────────── */
+    .main { padding: 8px; }
+
+    /* ── 3-column summary row ──────────────────────────────────────── */
+    .grid3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    @media (max-width: 900px) { .grid3 { grid-template-columns: 1fr; } }
+
+    /* ── Section container ─────────────────────────────────────────── */
+    .sect {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      margin-bottom: 8px;
+    }
+    .sect-hd {
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      padding: 4px 10px;
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    /* ── Key-value rows ────────────────────────────────────────────── */
+    .kv { padding: 2px 0; }
+    .kvr {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 3px 10px;
+      border-bottom: 1px solid var(--line);
+      gap: 8px;
+    }
+    .kvr:last-child { border-bottom: none; }
+    .kk { color: var(--dim); white-space: nowrap; }
+    .kv-val { font-weight: bold; text-align: right; }
+    .kv-warn { color: var(--yellow); font-weight: normal; font-size: 11px; }
+
+    /* ── Tables ─────────────────────────────────────────────────────── */
+    .tbl { width: 100%; border-collapse: collapse; }
+    .tbl th {
+      padding: 4px 10px;
+      text-align: left;
+      color: var(--dim);
+      font-weight: normal;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .tbl td {
+      padding: 4px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .tbl tr:last-child td { border-bottom: none; }
+    .tbl-empty {
+      padding: 10px;
+      color: var(--dim);
+      font-style: italic;
+      text-align: center;
+    }
+
+    /* ── Service status indicators ─────────────────────────────────── */
+    .s-impl     { color: var(--green); }
+    .s-partial  { color: var(--yellow); }
+    .s-stub     { color: var(--yellow); }
+    .s-missing  { color: var(--red); }
+    .s-degraded { color: var(--red); }
+
+    /* ── Readiness checklist ───────────────────────────────────────── */
+    .chk { display: flex; gap: 10px; padding: 4px 10px; border-bottom: 1px solid var(--line); }
+    .chk:last-child { border-bottom: none; }
+    .chk-sym { width: 14px; flex-shrink: 0; font-weight: bold; }
+    .chk-label { min-width: 320px; }
+    .chk-detail { color: var(--dim); font-size: 11px; }
+
+    /* ── Runtime gaps ──────────────────────────────────────────────── */
+    .gap { display: flex; gap: 14px; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+    .gap:last-child { border-bottom: none; }
+    .gap-label { color: var(--yellow); min-width: 300px; flex-shrink: 0; }
+    .gap-detail { color: var(--dim); }
+
+    /* ── Decision / fill state colours ────────────────────────────── */
+    .enter   { color: var(--green); font-weight: bold; }
+    .monitor { color: var(--yellow); }
+    .reject  { color: var(--red); }
+
+    /* ── Utility ───────────────────────────────────────────────────── */
+    .green  { color: var(--green); }
+    .yellow { color: var(--yellow); }
+    .red    { color: var(--red); }
+    .blue   { color: var(--blue); }
+    .dim    { color: var(--dim); }
+    .na     { color: var(--dim); font-style: italic; }
+    .sm     { font-size: 10px; }
+    .bold   { font-weight: bold; }
+
+    /* ── Auto-refresh countdown ────────────────────────────────────── */
+    #rfc { color: var(--dim); font-size: 11px; }
+  </style>
+</head>
+<body>
+  {% block content %}{% endblock %}
+  <script>
+    var _s = 10;
+    var _el = document.getElementById('rfc');
+    setInterval(function() {
+      _s -= 1;
+      if (_el) _el.textContent = 'auto-refresh in ' + _s + 's';
+      if (_s <= 0) { location.reload(); }
+    }, 1000);
+  </script>
+</body>
+</html>

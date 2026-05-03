@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+{% block content %}
+
+{# ── HEADER ──────────────────────────────────────────────────────────────── #}
+<div class="hdr">
+  <span class="hdr-title">BIT</span>
+  <span class="hdr-sep">│</span>
+
+  {% if s.mode == "PAPER" %}
+    <span class="badge b-paper">PAPER</span>
+  {% else %}
+    <span class="badge b-live">LIVE</span>
+  {% endif %}
+
+  {% if s.loop_running %}
+    <span class="badge b-loop-on">● LOOP RUNNING</span>
+  {% else %}
+    <span class="badge b-loop-off">○ LOOP NOT RUNNING</span>
+  {% endif %}
+
+  <span class="hdr-sep">│</span>
+  <span class="hdr-dim">{{ s.symbols | join("  ") }}</span>
+  <span class="hdr-sep">│</span>
+  <span class="hdr-dim">Snapshot: <span class="bold">{{ s.as_of | fmt_datetime }}</span></span>
+  <span class="hdr-sep">│</span>
+  <span class="hdr-dim">Last journal write: <span class="bold">{{ s.last_journal_write | fmt_datetime }}</span></span>
+  <span class="hdr-sep">│</span>
+  <span class="hdr-dim">Last pipeline run: <span class="bold">{{ s.last_pipeline_run | fmt_datetime }}</span></span>
+  <span class="hdr-sep">│</span>
+  <span id="rfc" class="hdr-dim">auto-refresh in 10s</span>
+</div>
+
+<div class="main">
+
+{# ── ROW: PORTFOLIO | RISK CONFIG | HEALTH ───────────────────────────────── #}
+<div class="grid3">
+
+  {# ── Portfolio / Balance ─────────────────────────────────────────────── #}
+  <div class="sect">
+    <div class="sect-hd">Portfolio / Balance</div>
+    <div class="kv">
+
+      {% if s.portfolio %}
+        <div class="kvr">
+          <span class="kk">Total equity</span>
+          <span class="kv-val">${{ s.portfolio.total_equity_usdt | fmt_decimal(2) }}</span>
+        </div>
+        <div class="kvr">
+          <span class="kk">Available cash</span>
+          <span class="kv-val">${{ s.portfolio.available_usdt | fmt_decimal(2) }}</span>
+        </div>
+        <div class="kvr">
+          <span class="kk">Realized PnL</span>
+          <span class="kv-val
+            {% if s.portfolio.realized_pnl_usdt | float > 0 %} green
+            {% elif s.portfolio.realized_pnl_usdt | float < 0 %} red
+            {% endif %}">
+            ${{ s.portfolio.realized_pnl_usdt | fmt_decimal(4) }}
+          </span>
+        </div>
+        <div class="kvr">
+          <span class="kk">Open positions</span>
+          <span class="kv-val">{{ s.portfolio.open_position_count }}</span>
+        </div>
+        <div class="kvr">
+          <span class="kk">Persistence</span>
+          <span class="kv-warn">⚠ IN-MEMORY ONLY — resets on restart</span>
+        </div>
+      {% else %}
+        <div class="kvr">
+          <span class="kk">Portfolio tracker</span>
+          <span class="kv-val na">NOT INJECTED — N/A</span>
+        </div>
+        <div class="kvr">
+          <span class="kk dim sm" style="font-size:10px;padding:4px 10px;color:var(--dim)">
+            Pass a shared PaperPortfolioTracker via create_app() to see live balance.
+          </span>
+        </div>
+      {% endif %}
+
+      <div class="kvr">
+        <span class="kk">Journal entries total</span>
+        <span class="kv-val">{{ s.journal_entry_count }}</span>
+      </div>
+
+    </div>
+  </div>
+
+  {# ── Risk Config ─────────────────────────────────────────────────────── #}
+  <div class="sect">
+    <div class="sect-hd">Risk Config</div>
+    <div class="kv">
+      <div class="kvr">
+        <span class="kk">Capital</span>
+        <span class="kv-val">${{ s.risk_config.capital_usdt | fmt_decimal(0) }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Max position</span>
+        <span class="kv-val">{{ s.risk_config.max_position_pct | fmt_pct(0) }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Max open positions</span>
+        <span class="kv-val">{{ s.risk_config.max_open_positions }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Max drawdown</span>
+        <span class="kv-val">{{ s.risk_config.max_drawdown_pct | fmt_pct(0) }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Enter threshold</span>
+        <span class="kv-val">{{ s.risk_config.enter_threshold | fmt_score }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Monitor threshold</span>
+        <span class="kv-val">{{ s.risk_config.monitor_threshold | fmt_score }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Fee rate (paper)</span>
+        <span class="kv-val">{{ s.risk_config.paper_fee_rate | fmt_pct(2) }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Slippage (paper)</span>
+        <span class="kv-val">{{ s.risk_config.paper_slippage_pct | fmt_pct(3) }}</span>
+      </div>
+      <div class="kvr">
+        <span class="kk">Paper mode</span>
+        <span class="kv-val {% if s.mode == 'PAPER' %}blue{% else %}red{% endif %}">{{ s.mode }}</span>
+      </div>
+    </div>
+  </div>
+
+  {# ── Health — Structural Availability ───────────────────────────────── #}
+  <div class="sect">
+    <div class="sect-hd">Health — Structural Availability</div>
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Status / Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in s.health %}
+        <tr>
+          <td style="white-space:nowrap">{{ item.name }}</td>
+          <td>
+            {% if item.status == "IMPLEMENTED" %}
+              <span class="s-impl">● IMPLEMENTED</span>
+            {% elif item.status == "PARTIAL" %}
+              <span class="s-partial">◑ PARTIAL</span>
+            {% elif item.status == "STUB" %}
+              <span class="s-stub">○ STUB</span>
+            {% elif item.status == "MISSING" %}
+              <span class="s-missing">✗ MISSING</span>
+            {% else %}
+              <span class="s-degraded">⚠ {{ item.status }}</span>
+            {% endif %}
+            {% if item.detail %}
+              <br><span class="dim sm">{{ item.detail }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>{# end .grid3 #}
+
+{# ── OPEN POSITIONS ──────────────────────────────────────────────────────── #}
+<div class="sect">
+  <div class="sect-hd">Open Positions</div>
+  {% if s.open_positions %}
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Symbol</th>
+        <th>Qty</th>
+        <th>Avg Entry Price</th>
+        <th>Mark Price</th>
+        <th>Unrealized PnL</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for pos in s.open_positions %}
+      <tr>
+        <td class="bold">{{ pos.symbol }}</td>
+        <td>{{ pos.qty }}</td>
+        <td>${{ pos.avg_entry_price | fmt_decimal(4) }}</td>
+        <td>
+          {% if pos.mark_price is not none %}
+            ${{ pos.mark_price | fmt_decimal(4) }}
+          {% else %}
+            <span class="na">N/A — no live price feed</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if pos.unrealized_pnl is not none %}
+            <span class="{% if pos.unrealized_pnl | float >= 0 %}green{% else %}red{% endif %}">
+              ${{ pos.unrealized_pnl | fmt_decimal(4) }}
+            </span>
+          {% else %}
+            <span class="na">N/A</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif s.portfolio is none %}
+    <div class="tbl-empty">Portfolio tracker not injected — position data unavailable.</div>
+  {% else %}
+    <div class="tbl-empty">No open positions.</div>
+  {% endif %}
+</div>
+
+{# ── RECENT DECISIONS ────────────────────────────────────────────────────── #}
+<div class="sect">
+  <div class="sect-hd">
+    Recent Decisions
+    {% if s.journal_entry_count > 0 %}
+      — {{ s.recent_decisions | length }} of {{ s.journal_entry_count }} total
+    {% endif %}
+  </div>
+  {% if s.recent_decisions %}
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Timestamp (UTC)</th>
+        <th>Symbol</th>
+        <th>State</th>
+        <th>Score</th>
+        <th>Strategy</th>
+        <th>Fill Price</th>
+        <th>Qty</th>
+        <th>Fee</th>
+        <th>Mode</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in s.recent_decisions %}
+      <tr>
+        <td class="dim">{{ d.timestamp | fmt_datetime }}</td>
+        <td class="bold">{{ d.symbol }}</td>
+        <td>
+          {% if d.state == "ENTER" %}<span class="enter">ENTER</span>
+          {% elif d.state == "MONITOR" %}<span class="monitor">MONITOR</span>
+          {% else %}<span class="reject">REJECT</span>{% endif %}
+        </td>
+        <td>{{ d.composite_score | fmt_score }}</td>
+        <td>{{ d.strategy_selected or '—' }}</td>
+        <td>{% if d.fill_price is not none %}${{ d.fill_price | fmt_decimal(4) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td>{% if d.fill_qty is not none %}{{ d.fill_qty }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td>{% if d.fee_usdt is not none %}${{ d.fee_usdt | fmt_decimal(4) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td>{% if d.is_paper %}<span class="blue">PAPER</span>{% else %}<span class="red">LIVE</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="tbl-empty">No decisions recorded yet. Start the pipeline loop to see data here.</div>
+  {% endif %}
+</div>
+
+{# ── RECENT FILLS ────────────────────────────────────────────────────────── #}
+<div class="sect">
+  <div class="sect-hd">Recent Fills</div>
+  {% if s.recent_fills %}
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Timestamp (UTC)</th>
+        <th>Symbol</th>
+        <th>Side</th>
+        <th>Qty</th>
+        <th>Fill Price</th>
+        <th>Fee USDT</th>
+        <th>Mode</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in s.recent_fills %}
+      <tr>
+        <td class="dim">{{ f.timestamp | fmt_datetime }}</td>
+        <td class="bold">{{ f.symbol }}</td>
+        <td><span class="green bold">{{ f.side }}</span></td>
+        <td>{{ f.qty }}</td>
+        <td>${{ f.fill_price | fmt_decimal(4) }}</td>
+        <td>${{ f.fee_usdt | fmt_decimal(4) }}</td>
+        <td>{% if f.is_paper %}<span class="blue">PAPER</span>{% else %}<span class="red">LIVE</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="tbl-empty">No fills recorded yet.</div>
+  {% endif %}
+</div>
+
+{# ── RUNTIME GAPS ────────────────────────────────────────────────────────── #}
+<div class="sect">
+  <div class="sect-hd">Runtime Gaps — Known Blockers &amp; Limitations</div>
+  {% for gap in s.runtime_gaps %}
+  <div class="gap">
+    <span class="gap-label">⚠ {{ gap.label }}</span>
+    <span class="gap-detail">{{ gap.detail }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+{# ── PAPER TRADING READINESS ─────────────────────────────────────────────── #}
+<div class="sect">
+  <div class="sect-hd">Paper Trading Readiness</div>
+  {% for item in s.readiness %}
+  <div class="chk">
+    {% if item.status == "READY" %}
+      <span class="chk-sym green">✓</span>
+      <span class="chk-label">{{ item.label }}</span>
+    {% elif item.status == "WARNING" %}
+      <span class="chk-sym yellow">~</span>
+      <span class="chk-label yellow">{{ item.label }}</span>
+    {% else %}
+      <span class="chk-sym red">✗</span>
+      <span class="chk-label red">{{ item.label }}</span>
+    {% endif %}
+    {% if item.detail %}
+      <span class="chk-detail">{{ item.detail }}</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+</div>{# end .main #}
+{% endblock %}
