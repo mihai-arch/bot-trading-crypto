@@ -64,6 +64,7 @@ class PaperPortfolioTracker:
         self._cash: Decimal = starting_cash
         self._positions: dict[Symbol, _PaperPosition] = {}
         self._realized_pnl: Decimal = _ZERO
+        self._last_mark_prices: dict[Symbol, Decimal] = {}
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -84,6 +85,18 @@ class PaperPortfolioTracker:
         else:
             self._apply_sell(fill)
 
+    def update_mark_price(self, symbol: Symbol, price: Decimal) -> None:
+        """Store the most recently observed market price for a symbol.
+
+        Called by the pipeline after each ticker fetch so the dashboard can
+        display live unrealized PnL without making additional API calls.
+        """
+        self._last_mark_prices[symbol] = price
+
+    def get_last_mark_price(self, symbol: Symbol) -> Decimal | None:
+        """Return the most recently stored price for symbol, or None if not yet seen."""
+        return self._last_mark_prices.get(symbol)
+
     def snapshot(
         self,
         mark_prices: dict[Symbol, Decimal] | None = None,
@@ -93,16 +106,17 @@ class PaperPortfolioTracker:
 
         Args:
             mark_prices: Optional current market prices per symbol.
-                         Used to compute unrealized PnL and total equity.
-                         Defaults to avg_entry_price for each position when
-                         not provided — this gives unrealized_pnl_usdt = 0
-                         and equity = cash + position cost basis.
+                         Merged with internally stored prices (from
+                         update_mark_price); passed-in values take precedence.
+                         For symbols with no price available, avg_entry_price
+                         is used as fallback — unrealized_pnl_usdt will be 0.
 
         Returns:
             PortfolioState with total_equity_usdt, available_usdt,
             open_positions, and realized_pnl_usdt.
         """
-        _marks = mark_prices or {}
+        # Stored prices are the baseline; caller can override per-symbol.
+        _marks: dict[Symbol, Decimal] = {**self._last_mark_prices, **(mark_prices or {})}
         open_positions: dict[Symbol, Position] = {}
         total_position_value = _ZERO
 

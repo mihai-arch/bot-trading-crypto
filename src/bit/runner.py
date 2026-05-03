@@ -35,6 +35,7 @@ from pathlib import Path
 from .config import BITConfig
 from .domain.enums import Symbol
 from .pipeline import Pipeline
+from .services.market_data import MarketDataService
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,8 @@ class RunnerState:
     last_error_message: str | None = None
     last_error_time: datetime | None = None
     symbols_last_cycle: list[str] = field(default_factory=list)
+    startup_validated: bool = False
+    startup_error: str | None = None
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-safe dict for the heartbeat file."""
@@ -82,6 +85,8 @@ class RunnerState:
             "last_error_message": self.last_error_message,
             "last_error_time": _iso(self.last_error_time),
             "symbols_last_cycle": self.symbols_last_cycle,
+            "startup_validated": self.startup_validated,
+            "startup_error": self.startup_error,
         }
 
 
@@ -109,6 +114,7 @@ class BotRunner:
         run_interval_seconds: int | None = None,
         heartbeat_path: Path | None = None,
         state: RunnerState | None = None,
+        market_data: MarketDataService | None = None,
     ) -> None:
         if not config.paper_trading:
             raise ValueError(
@@ -125,6 +131,7 @@ class BotRunner:
         )
         self._heartbeat_path = heartbeat_path or config.heartbeat_path
         self._running = False
+        self._market_data = market_data
 
         mode = "PAPER" if config.paper_trading else "LIVE"
         self._state = state or RunnerState(mode=mode)
@@ -157,12 +164,16 @@ class BotRunner:
         self._write_heartbeat()
 
         try:
+            await self._validate_startup()
             await self._loop()
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("BotRunner interrupted — shutting down.")
         finally:
             self._running = False
-            self._state.status = RunnerStatus.STOPPED
+            # Preserve ERROR status set by _validate_startup or _run_cycle;
+            # only move to STOPPED when the loop ended cleanly.
+            if self._state.status == RunnerStatus.RUNNING:
+                self._state.status = RunnerStatus.STOPPED
             self._state.last_heartbeat = datetime.now(tz=timezone.utc)
             self._write_heartbeat()
             logger.info("BotRunner stopped.")
@@ -174,6 +185,42 @@ class BotRunner:
     def _handle_signal(self) -> None:
         logger.info("SIGTERM received — requesting stop.")
         self.stop()
+
+    async def _validate_startup(self) -> None:
+        """
+        Verify market data connectivity before entering the run loop.
+
+        Fetches a ticker for the first configured symbol using the public
+        Bybit endpoint (no authentication required). If the call fails for
+        any reason, sets state to ERROR and raises RuntimeError so the caller
+        can fail clearly and visibly.
+
+        No-op when no MarketDataService was injected (skips validation).
+        """
+        if self._market_data is None:
+            return
+
+        probe_symbol = self._symbols[0]
+        logger.info(
+            "Startup validation: testing public market data connectivity (%s)...",
+            probe_symbol,
+        )
+        try:
+            ticker = await self._market_data.get_ticker(probe_symbol)
+            self._state.startup_validated = True
+            logger.info(
+                "Startup validation passed. %s last_price=%s",
+                probe_symbol,
+                ticker.last_price,
+            )
+        except Exception as exc:
+            err_msg = f"Market data connectivity check failed ({probe_symbol}): {type(exc).__name__}: {exc}"
+            self._state.startup_error = err_msg
+            self._state.status = RunnerStatus.ERROR
+            self._state.last_error_message = err_msg
+            self._state.last_error_time = datetime.now(tz=timezone.utc)
+            logger.error("Startup validation failed — runner will not start. %s", err_msg)
+            raise RuntimeError(err_msg) from exc
 
     async def _loop(self) -> None:
         """Scheduling loop: run cycle → sleep interval → repeat until stopped."""

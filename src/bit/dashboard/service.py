@@ -211,6 +211,9 @@ class DashboardService:
         positions: list[PositionRow] = []
 
         if self._portfolio is not None:
+            # snapshot() uses internally stored mark prices (updated each pipeline
+            # cycle via update_mark_price). Total equity reflects current prices
+            # for symbols seen so far; cost basis for unseen symbols.
             snap = self._portfolio.snapshot()
             portfolio_summary = PortfolioSummary(
                 total_equity_usdt=snap.total_equity_usdt,
@@ -219,16 +222,18 @@ class DashboardService:
                 open_position_count=len(snap.open_positions),
                 is_persistent=False,
             )
-            positions = [
-                PositionRow(
+            positions = []
+            for pos in snap.open_positions.values():
+                mark_price = self._portfolio.get_last_mark_price(pos.symbol)
+                positions.append(PositionRow(
                     symbol=str(pos.symbol),
                     qty=pos.qty,
                     avg_entry_price=pos.avg_entry_price,
-                    mark_price=None,        # no live ticker feed in v1
-                    unrealized_pnl=None,    # requires mark price
-                )
-                for pos in snap.open_positions.values()
-            ]
+                    mark_price=mark_price,
+                    # None when no price has been observed yet — avoids showing
+                    # 0 PnL as if it were computed from a real price.
+                    unrealized_pnl=pos.unrealized_pnl_usdt if mark_price is not None else None,
+                ))
 
         # ── Decisions + fills ─────────────────────────────────────────────────
         recent_decisions = [_entry_to_decision_row(e) for e in reversed(recent_entries)]
@@ -250,6 +255,7 @@ class DashboardService:
         # ── Runner state ───────────────────────────────────────────────────────
         rs = self._runner_state
         runner_running = rs is not None and str(rs.status) == "running"
+        startup_validated = rs is not None and rs.startup_validated
         runner_info: RunnerInfo | None = None
         if rs is not None:
             runner_info = RunnerInfo(
@@ -278,6 +284,7 @@ class DashboardService:
             journal_path=self._journal.path,
             project_root=self._project_root,
             runner_running=runner_running,
+            startup_validated=startup_validated,
         )
         runtime_gaps = _build_runtime_gaps(self._config, self._portfolio, runner_running)
 

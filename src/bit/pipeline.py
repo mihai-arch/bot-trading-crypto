@@ -76,6 +76,11 @@ class Pipeline:
         ticker = await self._market_data.get_ticker(symbol)
         instrument = await self._market_data.get_instrument_filter(symbol)
 
+        # Store the current price so the dashboard can show live unrealized PnL
+        # for this symbol without making its own API calls.
+        # v1 price field: Ticker.last_price (Bybit lastPrice — most recent trade).
+        self._portfolio.update_mark_price(symbol, ticker.last_price)
+
         # Portfolio state from the paper tracker, marked to current ticker price.
         # In live mode this would call MarketDataService.get_portfolio_state() instead.
         portfolio = self._portfolio.snapshot({symbol: ticker.last_price})

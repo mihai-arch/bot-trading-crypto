@@ -510,3 +510,56 @@ class TestApplyFillDispatch:
         t.apply_fill(_buy())
         t.apply_fill(_sell())
         assert t.position_count == 0
+
+
+class TestMarkPriceStorage:
+    """update_mark_price / get_last_mark_price / snapshot() merge behaviour."""
+
+    def test_get_last_mark_price_returns_none_when_not_set(self):
+        t = _tracker()
+        assert t.get_last_mark_price(Symbol.BTCUSDT) is None
+
+    def test_update_mark_price_stores_price(self):
+        t = _tracker()
+        t.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))
+        assert t.get_last_mark_price(Symbol.BTCUSDT) == Decimal("62000")
+
+    def test_snapshot_uses_stored_mark_price_for_unrealized_pnl(self):
+        """After update_mark_price, snapshot() computes unrealized PnL without
+        any passed-in mark_prices argument."""
+        t = _tracker()
+        t.apply_fill(_buy(qty="0.001", price="60000", fee="0.06"))
+        t.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))
+        s = t.snapshot()
+        # (62000 - 60000) * 0.001 = $2
+        assert s.open_positions[Symbol.BTCUSDT].unrealized_pnl_usdt == Decimal("2")
+
+    def test_snapshot_passed_arg_overrides_stored(self):
+        """Explicitly passed mark_prices take precedence over stored prices."""
+        t = _tracker()
+        t.apply_fill(_buy(qty="0.001", price="60000", fee="0.06"))
+        t.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))  # stored
+        s = t.snapshot({Symbol.BTCUSDT: Decimal("61000")})     # override
+        # (61000 - 60000) * 0.001 = $1 — override wins
+        assert s.open_positions[Symbol.BTCUSDT].unrealized_pnl_usdt == Decimal("1")
+
+    def test_stored_price_does_not_affect_other_symbols(self):
+        """Mark price for BTC must not change ETH position behaviour."""
+        t = _tracker()
+        t.apply_fill(_buy(symbol=Symbol.ETHUSDT, qty="0.01", price="3000", fee="0.03"))
+        t.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))
+        s = t.snapshot()
+        # ETH has no stored price — falls back to avg_entry, unrealized = 0
+        assert s.open_positions[Symbol.ETHUSDT].unrealized_pnl_usdt == Decimal("0")
+        assert t.get_last_mark_price(Symbol.ETHUSDT) is None
+
+    def test_equity_reflects_stored_mark_price(self):
+        """total_equity_usdt uses current mark price when available."""
+        t = _tracker()
+        # cash after buy: 500 - (60 + 0.06) = 439.94
+        t.apply_fill(_buy(qty="0.001", price="60000", fee="0.06"))
+        t.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))
+        s = t.snapshot()
+        # equity = cash + 0.001 * 62000 = 439.94 + 62 = 501.94
+        expected = Decimal("439.94") + Decimal("0.001") * Decimal("62000")
+        assert s.total_equity_usdt == expected

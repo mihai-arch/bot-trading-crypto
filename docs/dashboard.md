@@ -47,17 +47,27 @@ The `/api/snapshot` endpoint returns the same data as JSON for scripting or poll
 | Journal entry count | `JournalLearningStore.entry_count()` |
 | API key presence (not validity) | `BITConfig.bybit_api_key != ""` |
 
-### Unavailable in v1 (shown explicitly as N/A or MISSING)
+### Available when runner is active (v1.1)
+
+| Data | Source | Requires |
+|---|---|---|
+| Mark prices (last trade price) | `PaperPortfolioTracker._last_mark_prices` | Runner must have completed ≥1 cycle per symbol |
+| Unrealized PnL on open positions | Computed from stored mark price vs avg entry | Same as above |
+| Total equity (mark-to-market) | `portfolio.snapshot()` uses stored prices | Same as above |
+| Market data connectivity status | `RunnerState.startup_validated` | Runner performed startup check successfully |
+| Loop / scheduler status | `RunnerState.status` | Runner wired via `create_app(runner_state=...)` |
+| Last heartbeat timestamp | `RunnerState.last_heartbeat` | Same as above |
+
+**Price field used:** `Ticker.last_price` (Bybit `lastPrice` — most recent trade price).
+Bybit spot has no separate "mark price" concept; last traded price is the correct cost-basis reference.
+
+### Still unavailable (shown as N/A or MISSING)
 
 | Data | Reason |
 |---|---|
-| Mark prices / live prices | No market data loop running |
-| Unrealized PnL on open positions | Requires live mark prices |
-| Loop / scheduler status | No scheduler exists yet |
-| Last heartbeat timestamp | No scheduler exists yet |
 | Docker / container status | No docker-compose.yml yet |
-| API key validity | No live verification call made |
-| Market data connectivity | Not verified at runtime |
+| API key validity (private endpoint) | No authenticated API call is made in v1 |
+| WebSocket-based streaming prices | REST polling only; price updates once per pipeline cycle |
 
 The dashboard **never fakes data**. If something is unavailable, it is shown as `N/A`,
 `UNAVAILABLE`, or `MISSING` with an explanation. No placeholder values.
@@ -139,17 +149,19 @@ It reflects the codebase state, not runtime connectivity.
 
 ## What Remains Before Continuous Paper Trading
 
-1. **Scheduler / run loop** — Add a `Runner` that calls `pipeline.run(symbol)` on a
-   configurable interval for all symbols. This is the most critical blocker.
+1. ~~**Scheduler / run loop**~~ — ✓ Implemented. `BotRunner` calls `pipeline.run(symbol)` on
+   a configurable interval. Start with `python -m bit`.
 
 2. **Portfolio state persistence** — `PaperPortfolioTracker` resets on restart.
    Add a JSON sidecar file that saves/restores state between runs.
 
-3. **Verified market data connection** — Start the loop with a real API key and confirm
-   `get_klines()` / `get_ticker()` return real data.
+3. ~~**Verified market data connection**~~ — ✓ `BotRunner` now performs a startup
+   connectivity check (ticker fetch) before entering the loop. Result is visible
+   in the readiness panel.
 
-4. **Process supervision** — The dashboard cannot tell if the bot loop has stalled.
-   A heartbeat file or a shared timestamp is needed.
+4. ~~**Process supervision heartbeat**~~ — ✓ `BotRunner` writes an atomic JSON heartbeat
+   file after every cycle (`data/heartbeat.json`). `RunnerState` is shared with the
+   dashboard in-process.
 
 5. **Docker (optional but recommended)** — For production paper trading, a
    `docker-compose.yml` with the bot and dashboard as separate services.

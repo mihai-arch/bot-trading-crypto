@@ -312,6 +312,69 @@ class TestPortfolio:
         snap = service.build_snapshot()
         assert snap.portfolio.open_position_count == len(snap.open_positions)
 
+    def test_open_position_mark_price_from_tracker(self, tmp_path):
+        """When the tracker has a stored mark price, PositionRow shows it."""
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        fill = Fill(
+            order_id=str(uuid4()),
+            symbol=Symbol.BTCUSDT,
+            side=OrderSide.BUY,
+            filled_qty=Decimal("0.001"),
+            avg_fill_price=Decimal("60000"),
+            fee_usdt=Decimal("0.06"),
+            slippage_usdt=Decimal("0"),
+            filled_at=_TS_BASE,
+            is_paper=True,
+        )
+        tracker.apply_fill(fill)
+        tracker.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))
+        service = _make_service(tmp_path, portfolio=tracker)
+        pos = service.build_snapshot().open_positions[0]
+        assert pos.mark_price == Decimal("62000")
+
+    def test_open_position_unrealized_pnl_from_tracker(self, tmp_path):
+        """When a mark price is stored, unrealized_pnl is computed (not None)."""
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        fill = Fill(
+            order_id=str(uuid4()),
+            symbol=Symbol.BTCUSDT,
+            side=OrderSide.BUY,
+            filled_qty=Decimal("0.001"),
+            avg_fill_price=Decimal("60000"),
+            fee_usdt=Decimal("0.06"),
+            slippage_usdt=Decimal("0"),
+            filled_at=_TS_BASE,
+            is_paper=True,
+        )
+        tracker.apply_fill(fill)
+        tracker.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))
+        service = _make_service(tmp_path, portfolio=tracker)
+        pos = service.build_snapshot().open_positions[0]
+        # (62000 - 60000) * 0.001 = $2
+        assert pos.unrealized_pnl == Decimal("2")
+
+    def test_total_equity_reflects_mark_price(self, tmp_path):
+        """portfolio.total_equity_usdt uses stored mark price once available."""
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        fill = Fill(
+            order_id=str(uuid4()),
+            symbol=Symbol.BTCUSDT,
+            side=OrderSide.BUY,
+            filled_qty=Decimal("0.001"),
+            avg_fill_price=Decimal("60000"),
+            fee_usdt=Decimal("0.06"),
+            slippage_usdt=Decimal("0"),
+            filled_at=_TS_BASE,
+            is_paper=True,
+        )
+        tracker.apply_fill(fill)
+        tracker.update_mark_price(Symbol.BTCUSDT, Decimal("62000"))
+        service = _make_service(tmp_path, portfolio=tracker)
+        snap = service.build_snapshot()
+        # cash = 500 - 60.06 = 439.94; position value at mark = 0.001 * 62000 = 62
+        expected = Decimal("439.94") + Decimal("0.001") * Decimal("62000")
+        assert snap.portfolio.total_equity_usdt == expected
+
 
 # ── Risk config ────────────────────────────────────────────────────────────
 

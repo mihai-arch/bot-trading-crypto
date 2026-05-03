@@ -45,12 +45,15 @@ logging.basicConfig(
 logger = logging.getLogger("bit")
 
 
-def build_pipeline(config: BITConfig) -> tuple[Pipeline, PaperPortfolioTracker]:
+def build_pipeline(
+    config: BITConfig,
+) -> tuple[Pipeline, PaperPortfolioTracker, MarketDataService]:
     """
     Instantiate and wire all services for one bot session.
 
-    Returns (Pipeline, PaperPortfolioTracker). Pass the tracker to the dashboard's
-    create_app() to see live portfolio state on the dashboard.
+    Returns (Pipeline, PaperPortfolioTracker, MarketDataService).
+    Pass the tracker to create_app() to see live portfolio state on the dashboard.
+    Pass the MarketDataService to BotRunner for startup connectivity validation.
     """
     market_data = MarketDataService(config)
     feature_engine = FeatureEngine()
@@ -77,7 +80,7 @@ def build_pipeline(config: BITConfig) -> tuple[Pipeline, PaperPortfolioTracker]:
         journal=journal,
         portfolio_tracker=portfolio,
     )
-    return pipeline, portfolio
+    return pipeline, portfolio, market_data
 
 
 async def _run() -> None:
@@ -97,9 +100,13 @@ async def _run() -> None:
         config.heartbeat_path,
     )
 
-    pipeline, _portfolio = build_pipeline(config)
-    runner = BotRunner(config=config, pipeline=pipeline)
-    await runner.start()
+    pipeline, _portfolio, market_data = build_pipeline(config)
+    runner = BotRunner(config=config, pipeline=pipeline, market_data=market_data)
+    try:
+        await runner.start()
+    except RuntimeError as exc:
+        logger.error("Runner failed to start: %s", exc)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

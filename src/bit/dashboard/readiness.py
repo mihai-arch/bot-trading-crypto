@@ -36,6 +36,7 @@ class ReadinessEvaluator:
         journal_path: Path,
         project_root: Path = Path("."),
         runner_running: bool = False,
+        startup_validated: bool = False,
     ) -> list[ReadinessItem]:
         """Return one ReadinessItem per check, in priority order."""
         return [
@@ -44,7 +45,7 @@ class ReadinessEvaluator:
             self._check_journal_writable(journal_path),
             self._check_api_key(config),
             self._check_scheduler(runner_running),
-            self._check_market_connectivity(config),
+            self._check_market_connectivity(config, startup_validated),
             self._check_journal_has_data(journal_entry_count),
             self._check_docker(project_root),
         ]
@@ -146,7 +147,10 @@ class ReadinessEvaluator:
         )
 
     @staticmethod
-    def _check_market_connectivity(config: BITConfig) -> ReadinessItem:
+    def _check_market_connectivity(
+        config: BITConfig,
+        startup_validated: bool = False,
+    ) -> ReadinessItem:
         if not config.bybit_api_key:
             return ReadinessItem(
                 key="market_connectivity",
@@ -154,13 +158,23 @@ class ReadinessEvaluator:
                 status=ReadinessStatus.MISSING,
                 detail="Cannot verify market data connectivity without a Bybit API key.",
             )
+        if startup_validated:
+            return ReadinessItem(
+                key="market_connectivity",
+                label="Market data connectivity verified",
+                status=ReadinessStatus.READY,
+                detail=(
+                    "BotRunner performed a live ticker fetch at startup and received "
+                    "a valid response from Bybit. Connectivity is confirmed."
+                ),
+            )
         return ReadinessItem(
             key="market_connectivity",
             label="Market data connectivity not verified",
             status=ReadinessStatus.WARNING,
             detail=(
-                "MarketDataService is implemented but no live API call has been made. "
-                "Connectivity to Bybit is assumed, not confirmed."
+                "API key is present but no live connectivity check has been made. "
+                "Start the runner (python -m bit) to verify connectivity at startup."
             ),
         )
 

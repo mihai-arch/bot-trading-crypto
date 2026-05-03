@@ -464,6 +464,137 @@ class TestConfigDriven:
         assert runner._heartbeat_path == hb
 
 
+# ── Startup validation ────────────────────────────────────────────────────────
+
+from decimal import Decimal as _Decimal
+from unittest.mock import AsyncMock as _AsyncMock
+
+from bit.domain.market import Ticker as _Ticker
+from bit.domain.enums import Symbol as _Symbol
+
+
+def _make_ticker(symbol=Symbol.BTCUSDT, last_price="60000") -> _Ticker:
+    from datetime import datetime, timezone
+    return _Ticker(
+        symbol=symbol,
+        last_price=_Decimal(last_price),
+        bid=_Decimal(last_price),
+        ask=_Decimal(last_price),
+        timestamp=datetime.now(tz=timezone.utc),
+    )
+
+
+def _make_market_data(ticker=None, raise_exc=None):
+    """Return a mock MarketDataService for startup validation tests."""
+    md = MagicMock()
+    if raise_exc is not None:
+        md.get_ticker = _AsyncMock(side_effect=raise_exc)
+    else:
+        md.get_ticker = _AsyncMock(return_value=ticker or _make_ticker())
+    return md
+
+
+class TestStartupValidation:
+    """BotRunner._validate_startup() behaviour."""
+
+    @pytest.mark.asyncio
+    async def test_validation_skipped_when_no_market_data(self, tmp_path):
+        """No market_data injected → startup_validated stays False, no error."""
+        config = _make_config(symbols=[Symbol.BTCUSDT])
+        runner = BotRunner(
+            config=config,
+            pipeline=_make_pipeline(),
+            heartbeat_path=tmp_path / "hb.json",
+        )
+        # Should not raise
+        await runner._validate_startup()
+        assert runner.state.startup_validated is False
+        assert runner.state.startup_error is None
+
+    @pytest.mark.asyncio
+    async def test_validation_success_sets_startup_validated(self, tmp_path):
+        config = _make_config(symbols=[Symbol.BTCUSDT])
+        md = _make_market_data(ticker=_make_ticker(last_price="61000"))
+        runner = BotRunner(
+            config=config,
+            pipeline=_make_pipeline(),
+            heartbeat_path=tmp_path / "hb.json",
+            market_data=md,
+        )
+        await runner._validate_startup()
+        assert runner.state.startup_validated is True
+        assert runner.state.startup_error is None
+        md.get_ticker.assert_called_once_with(Symbol.BTCUSDT)
+
+    @pytest.mark.asyncio
+    async def test_validation_failure_raises_runtime_error(self, tmp_path):
+        config = _make_config(symbols=[Symbol.BTCUSDT])
+        md = _make_market_data(raise_exc=ConnectionError("timeout"))
+        runner = BotRunner(
+            config=config,
+            pipeline=_make_pipeline(),
+            heartbeat_path=tmp_path / "hb.json",
+            market_data=md,
+        )
+        with pytest.raises(RuntimeError, match="connectivity check failed"):
+            await runner._validate_startup()
+
+    @pytest.mark.asyncio
+    async def test_validation_failure_sets_error_state(self, tmp_path):
+        config = _make_config(symbols=[Symbol.BTCUSDT])
+        md = _make_market_data(raise_exc=ConnectionError("timeout"))
+        runner = BotRunner(
+            config=config,
+            pipeline=_make_pipeline(),
+            heartbeat_path=tmp_path / "hb.json",
+            market_data=md,
+        )
+        try:
+            await runner._validate_startup()
+        except RuntimeError:
+            pass
+        assert runner.state.startup_validated is False
+        assert runner.state.startup_error is not None
+        assert "ConnectionError" in runner.state.startup_error
+        assert runner.state.status == RunnerStatus.ERROR
+
+    @pytest.mark.asyncio
+    async def test_validation_failure_loop_never_runs(self, tmp_path):
+        """When startup validation fails, the pipeline must never be called."""
+        config = _make_config(symbols=[Symbol.BTCUSDT], run_interval_seconds=0)
+        pipeline = _make_pipeline()
+        md = _make_market_data(raise_exc=OSError("unreachable"))
+        runner = BotRunner(
+            config=config,
+            pipeline=pipeline,
+            heartbeat_path=tmp_path / "hb.json",
+            market_data=md,
+        )
+        with pytest.raises(RuntimeError):
+            await runner.start()
+        pipeline.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_startup_error_written_to_heartbeat(self, tmp_path):
+        import json as _json
+        config = _make_config(symbols=[Symbol.BTCUSDT])
+        md = _make_market_data(raise_exc=ConnectionError("timeout"))
+        hb_path = tmp_path / "hb.json"
+        runner = BotRunner(
+            config=config,
+            pipeline=_make_pipeline(),
+            heartbeat_path=hb_path,
+            market_data=md,
+        )
+        with pytest.raises(RuntimeError):
+            await runner.start()
+        assert hb_path.exists()
+        data = _json.loads(hb_path.read_text())
+        assert data["startup_error"] is not None
+        assert data["startup_validated"] is False
+        assert data["status"] == "error"
+
+
 # ── Dashboard integration ─────────────────────────────────────────────────────
 
 from bit.dashboard.service import DashboardService
@@ -563,3 +694,50 @@ class TestDashboardIntegration:
 
         gap_labels = [g.label for g in snap.runtime_gaps]
         assert any("scheduler" in label.lower() for label in gap_labels)
+
+    def test_market_connectivity_ready_when_startup_validated(self):
+        """When runner.startup_validated=True the readiness item is READY."""
+        from bit.dashboard.models import ReadinessStatus
+        from bit.config import BITConfig
+
+        config = _make_config(bybit_api_key="real-key-present")
+        journal = MagicMock(spec=_JournalStore)
+        journal.read_all.return_value = []
+        journal.path = Path("data/journal.jsonl")
+
+        state = RunnerState(
+            mode="PAPER",
+            status=RunnerStatus.RUNNING,
+            startup_validated=True,
+        )
+        service = DashboardService(
+            config=config,
+            journal=journal,
+            runner_state=state,
+        )
+        snap = service.build_snapshot()
+        conn_item = next(r for r in snap.readiness if r.key == "market_connectivity")
+        assert conn_item.status == ReadinessStatus.READY
+
+    def test_market_connectivity_warning_when_not_validated(self):
+        """Without startup_validated the connectivity item stays WARNING."""
+        from bit.dashboard.models import ReadinessStatus
+
+        config = _make_config(bybit_api_key="real-key-present")
+        journal = MagicMock(spec=_JournalStore)
+        journal.read_all.return_value = []
+        journal.path = Path("data/journal.jsonl")
+
+        state = RunnerState(
+            mode="PAPER",
+            status=RunnerStatus.RUNNING,
+            startup_validated=False,
+        )
+        service = DashboardService(
+            config=config,
+            journal=journal,
+            runner_state=state,
+        )
+        snap = service.build_snapshot()
+        conn_item = next(r for r in snap.readiness if r.key == "market_connectivity")
+        assert conn_item.status == ReadinessStatus.WARNING

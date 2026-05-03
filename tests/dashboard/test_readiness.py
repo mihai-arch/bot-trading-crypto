@@ -40,6 +40,8 @@ def _evaluate(
     journal_path: Path | None = None,
     project_root: Path | None = None,
     tmp_path: Path | None = None,
+    runner_running: bool = False,
+    startup_validated: bool = False,
 ):
     cfg = config or _config()
     jpath = journal_path or (tmp_path / "data" / "journal.jsonl" if tmp_path else Path("data/journal.jsonl"))
@@ -50,6 +52,8 @@ def _evaluate(
         portfolio_available=portfolio_available,
         journal_path=jpath,
         project_root=root,
+        runner_running=runner_running,
+        startup_validated=startup_validated,
     )
 
 
@@ -209,3 +213,44 @@ class TestDockerCheck:
         items = _evaluate(project_root=tmp_path, tmp_path=tmp_path)
         item = next(i for i in items if i.key == "docker")
         assert item.status == ReadinessStatus.READY
+
+
+class TestStartupValidatedConnectivity:
+    """market_connectivity item becomes READY after startup validation."""
+
+    def test_key_present_not_validated_is_warning(self, tmp_path):
+        items = _evaluate(
+            config=_config(bybit_api_key="abc123"),
+            startup_validated=False,
+            tmp_path=tmp_path,
+        )
+        item = next(i for i in items if i.key == "market_connectivity")
+        assert item.status == ReadinessStatus.WARNING
+
+    def test_key_present_and_validated_is_ready(self, tmp_path):
+        items = _evaluate(
+            config=_config(bybit_api_key="abc123"),
+            startup_validated=True,
+            tmp_path=tmp_path,
+        )
+        item = next(i for i in items if i.key == "market_connectivity")
+        assert item.status == ReadinessStatus.READY
+
+    def test_validated_ready_detail_mentions_confirmed(self, tmp_path):
+        items = _evaluate(
+            config=_config(bybit_api_key="abc123"),
+            startup_validated=True,
+            tmp_path=tmp_path,
+        )
+        item = next(i for i in items if i.key == "market_connectivity")
+        assert "confirm" in item.detail.lower() or "verif" in item.detail.lower()
+
+    def test_no_key_remains_missing_even_if_validated(self, tmp_path):
+        """startup_validated cannot upgrade MISSING — key is still required."""
+        items = _evaluate(
+            config=_config(bybit_api_key=""),
+            startup_validated=True,
+            tmp_path=tmp_path,
+        )
+        item = next(i for i in items if i.key == "market_connectivity")
+        assert item.status == ReadinessStatus.MISSING
