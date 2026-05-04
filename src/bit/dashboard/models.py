@@ -117,6 +117,36 @@ class RuntimeGap(BaseModel):
     detail: str   # Explanation and suggested action
 
 
+class PersistenceStatus(StrEnum):
+    """Status of a persisted state file on disk."""
+
+    OK = "ok"           # File exists and parsed successfully
+    NOT_FOUND = "not_found"   # No file yet — first run or persistence not set up
+    CORRUPT = "corrupt"       # File exists but cannot be parsed
+
+
+class RunnerStateSnapshot(BaseModel):
+    """
+    Persisted runner state as read by the dashboard.
+
+    Populated from the runner_state.json file on disk.
+    None if the file does not exist or is corrupt.
+    """
+
+    status: str                             # RunnerStatus value
+    startup_validated: bool
+    startup_error: str | None
+    last_heartbeat: datetime | None
+    last_cycle_start: datetime | None
+    last_cycle_end: datetime | None
+    last_successful_cycle: datetime | None
+    last_error: str | None
+    processed_symbols: list[str]
+    updated_at: datetime
+    state_age_seconds: float | None = None  # Seconds since file was last written
+    credential_check: str | None = None     # "ok" / "skipped" / "failed: ..." / None
+
+
 class DashboardSnapshot(BaseModel):
     """
     Complete dashboard state snapshot.
@@ -133,7 +163,7 @@ class DashboardSnapshot(BaseModel):
     as_of: datetime                         # When this snapshot was built (UTC)
     last_journal_write: datetime | None     # Most recent JournalEntry.cycle_timestamp
     last_pipeline_run: datetime | None      # Same as last_journal_write in v1
-    loop_running: bool = False              # Always False until a scheduler is added
+    loop_running: bool = False              # True only if runner state file is recent+running
     journal_entry_count: int
 
     # ── Sections ──────────────────────────────────────────────────────────────
@@ -145,3 +175,9 @@ class DashboardSnapshot(BaseModel):
     health: list[HealthItem]                # One per service; structural probes only
     readiness: list[ReadinessItem]          # Paper trading readiness checklist
     runtime_gaps: list[RuntimeGap]          # Known blockers and limitations
+
+    # ── Persistence ────────────────────────────────────────────────────────────
+    runner_state: RunnerStateSnapshot | None = None
+    """Persisted runner state from disk. None if file absent or unreadable."""
+    portfolio_persistence: str = PersistenceStatus.NOT_FOUND
+    """Status of the portfolio state file: ok / not_found / corrupt."""

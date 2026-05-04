@@ -1,7 +1,11 @@
 """
 BybitRestClient
 
-Thin async HTTP wrapper for Bybit v5 public REST endpoints.
+Thin async HTTP wrapper for Bybit v5 REST endpoints (public and authenticated).
+
+Public endpoints: use get()
+Authenticated endpoints: use get_signed() — adds HMAC headers automatically.
+
 Responsibilities:
 - Base URL selection (mainnet vs. testnet)
 - Request timeouts
@@ -9,11 +13,17 @@ Responsibilities:
 - Bybit envelope validation (retCode)
 - JSON decode failure detection
 - Extraction of the 'result' field so callers never see envelope boilerplate
+- HMAC-SHA256 request signing for authenticated endpoints
 
 No domain knowledge lives here. No parsing of API fields into domain models.
 """
 
+import time
+from urllib.parse import urlencode
+
 import httpx
+
+from .auth import make_auth_headers
 
 
 class BybitAPIError(Exception):
@@ -65,6 +75,61 @@ class BybitRestClient:
         """
         try:
             response = await self._http.get(path, params=params)
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise BybitNetworkError(f"Request timed out: {path}") from exc
+        except httpx.HTTPStatusError as exc:
+            raise BybitNetworkError(
+                f"HTTP {exc.response.status_code} from {path}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise BybitNetworkError(f"Network error on {path}: {exc}") from exc
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise BybitNetworkError(f"Invalid JSON response from {path}") from exc
+
+        ret_code = data.get("retCode", -1)
+        if ret_code != 0:
+            raise BybitAPIError(
+                ret_code=ret_code,
+                message=data.get("retMsg", "unknown"),
+                endpoint=path,
+            )
+
+        return data["result"]
+
+    async def get_signed(
+        self,
+        path: str,
+        params: dict[str, str | int],
+        api_key: str,
+        api_secret: str,
+        recv_window: str = "5000",
+    ) -> dict:
+        """
+        Perform an authenticated GET request with HMAC-SHA256 signature.
+
+        Signs the request using the provided credentials and adds Bybit auth
+        headers. Returns the 'result' field from the response envelope.
+
+        Raises:
+            BybitNetworkError: On HTTP error status, timeout, or invalid JSON.
+            BybitAPIError: When retCode != 0 (includes invalid key / permission denied).
+        """
+        query_string = urlencode(params) if params else ""
+        timestamp = str(int(time.time() * 1000))
+        auth_headers = make_auth_headers(
+            api_key=api_key,
+            api_secret=api_secret,
+            timestamp=timestamp,
+            payload=query_string,
+            recv_window=recv_window,
+        )
+
+        try:
+            response = await self._http.get(path, params=params, headers=auth_headers)
             response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise BybitNetworkError(f"Request timed out: {path}") from exc

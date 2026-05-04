@@ -6,7 +6,7 @@ Verifies:
 - Each service probe returns the expected ServiceStatus
 - ExecutionEngine probe responds to paper_trading flag
 - Journal probe: writable directory → IMPLEMENTED, not-writable → DEGRADED
-- Scheduler probe is always MISSING
+- Scheduler probe is always IMPLEMENTED (BotRunner is implemented)
 - Docker probe: no file → MISSING; compose file present → IMPLEMENTED
 """
 
@@ -30,14 +30,14 @@ def _config(**kwargs) -> BITConfig:
 
 
 class TestProbeAll:
-    def test_returns_nine_items(self, tmp_path):
+    def test_returns_ten_items(self, tmp_path):
         checker = HealthChecker()
         items = checker.probe_all(
             config=_config(),
             journal_path=tmp_path / "journal.jsonl",
             project_root=tmp_path,
         )
-        assert len(items) == 9
+        assert len(items) == 10
 
     def test_item_names_in_order(self, tmp_path):
         checker = HealthChecker()
@@ -146,17 +146,17 @@ class TestJournalProbe:
 
 
 class TestSchedulerProbe:
-    def test_scheduler_always_missing(self, tmp_path):
+    def test_scheduler_always_implemented(self, tmp_path):
         checker = HealthChecker()
         items = checker.probe_all(_config(), tmp_path / "j.jsonl", tmp_path)
         item = next(i for i in items if i.name == "Scheduler / Loop")
-        assert item.status == ServiceStatus.MISSING
+        assert item.status == ServiceStatus.IMPLEMENTED
 
-    def test_scheduler_detail_mentions_pipeline(self, tmp_path):
+    def test_scheduler_detail_mentions_botrunner(self, tmp_path):
         checker = HealthChecker()
         items = checker.probe_all(_config(), tmp_path / "j.jsonl", tmp_path)
         item = next(i for i in items if i.name == "Scheduler / Loop")
-        assert "pipeline" in item.detail.lower()
+        assert "botrunner" in item.detail.lower() or "runner" in item.detail.lower()
 
 
 class TestDockerProbe:

@@ -43,6 +43,7 @@ class HealthChecker:
             self._probe_risk_engine(),
             self._probe_execution_engine(config),
             self._probe_journal(journal_path),
+            self._probe_portfolio_persistence(config.portfolio_state_path),
             self._probe_scheduler(),
             self._probe_docker(project_root),
         ]
@@ -133,13 +134,31 @@ class HealthChecker:
         )
 
     @staticmethod
+    def _probe_portfolio_persistence(portfolio_state_path: Path) -> HealthItem:
+        """
+        Structural probe for paper portfolio persistence.
+
+        Reports whether PortfolioStateStore is implemented and where the state
+        file is configured. Does not check whether the file currently exists —
+        that is a readiness concern, not a structural one.
+        """
+        return HealthItem(
+            name="PortfolioStateStore",
+            status=ServiceStatus.IMPLEMENTED,
+            detail=(
+                f"JSON persistence at {portfolio_state_path}. "
+                "Saves on fill; restores at startup. Atomic write (temp→rename)."
+            ),
+        )
+
+    @staticmethod
     def _probe_scheduler() -> HealthItem:
         return HealthItem(
             name="Scheduler / Loop",
-            status=ServiceStatus.MISSING,
+            status=ServiceStatus.IMPLEMENTED,
             detail=(
-                "No run loop exists. pipeline.run(symbol) must be called manually "
-                "per cycle. Continuous paper trading is not possible yet."
+                "BotRunner implemented in bit.runner. "
+                "Start with: python -m bit (local) or docker compose up bot."
             ),
         )
 

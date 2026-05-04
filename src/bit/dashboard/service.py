@@ -20,6 +20,8 @@ from ..config import BITConfig
 from ..domain.journal import JournalEntry
 from ..services.journal import JournalLearningStore
 from ..services.paper_portfolio import PaperPortfolioTracker
+from ..services.portfolio_store import PortfolioStateStore
+from ..services.runner_state import RunnerStateStore
 from .health import HealthChecker
 from .models import (
     DashboardSnapshot,
@@ -29,8 +31,12 @@ from .models import (
     PositionRow,
     RiskConfig,
     RuntimeGap,
+    RunnerStateSnapshot,
 )
 from .readiness import ReadinessEvaluator
+
+# Runner state is considered stale if the file has not been updated in this many seconds.
+_RUNNER_STATE_STALE_SECONDS = 120
 
 _MAX_RECENT = 20
 
@@ -95,6 +101,8 @@ def _collect_fills(entries: list[JournalEntry]) -> list[FillRow]:
 def _build_runtime_gaps(
     config: BITConfig,
     portfolio: PaperPortfolioTracker | None,
+    portfolio_persistence_status: str = "not_found",
+    runner_state: RunnerStateSnapshot | None = None,
 ) -> list[RuntimeGap]:
     """
     Build the known runtime gaps list.
@@ -102,16 +110,33 @@ def _build_runtime_gaps(
     These are always shown — they represent the honest current state of the
     project and what is still needed before continuous paper trading works.
     """
-    gaps: list[RuntimeGap] = [
-        RuntimeGap(
+    gaps: list[RuntimeGap] = []
+
+    # ── Scheduler / loop ──────────────────────────────────────────────────────
+    if runner_state is not None:
+        age_str = (
+            f" (state age: {runner_state.state_age_seconds:.0f}s)"
+            if runner_state.state_age_seconds is not None
+            else ""
+        )
+        gaps.append(RuntimeGap(
+            label=f"Runner state: {runner_state.status}{age_str}",
+            detail=(
+                f"Last heartbeat: {runner_state.last_heartbeat or 'N/A'}. "
+                f"Last successful cycle: {runner_state.last_successful_cycle or 'N/A'}. "
+                f"Symbols: {', '.join(runner_state.processed_symbols) or 'none'}."
+            ),
+        ))
+    else:
+        gaps.append(RuntimeGap(
             label="No scheduler / run loop",
             detail=(
                 "pipeline.run(symbol) is never called automatically. "
                 "A Runner / async loop must be added to start paper trading continuously."
             ),
-        ),
-    ]
+        ))
 
+    # ── Portfolio ─────────────────────────────────────────────────────────────
     if portfolio is None:
         gaps.append(RuntimeGap(
             label="Portfolio tracker not injected into dashboard",
@@ -120,15 +145,32 @@ def _build_runtime_gaps(
                 "Portfolio section shows N/A. Pass the tracker via create_app()."
             ),
         ))
+    elif portfolio_persistence_status == "ok":
+        gaps.append(RuntimeGap(
+            label="Portfolio state persisted (in-memory + disk)",
+            detail=(
+                f"State is saved to {config.portfolio_state_path} after each fill. "
+                "Positions will survive process restart."
+            ),
+        ))
+    elif portfolio_persistence_status == "corrupt":
+        gaps.append(RuntimeGap(
+            label="Portfolio state file corrupt",
+            detail=(
+                f"{config.portfolio_state_path} exists but cannot be parsed. "
+                "Portfolio state may not survive restart. Inspect the file manually."
+            ),
+        ))
     else:
         gaps.append(RuntimeGap(
-            label="Portfolio state is in-memory only",
+            label="Portfolio state is in-memory only (not yet persisted)",
             detail=(
-                "PaperPortfolioTracker state resets on process restart. "
-                "No persistence to disk yet."
+                "PaperPortfolioTracker is active but no state file exists yet. "
+                f"State will be written to {config.portfolio_state_path} after the first fill."
             ),
         ))
 
+    # ── Mark prices ───────────────────────────────────────────────────────────
     gaps.append(RuntimeGap(
         label="No live mark prices",
         detail=(
@@ -137,6 +179,7 @@ def _build_runtime_gaps(
         ),
     ))
 
+    # ── API key ───────────────────────────────────────────────────────────────
     if not config.bybit_api_key:
         gaps.append(RuntimeGap(
             label="Bybit API key not configured",
@@ -151,6 +194,7 @@ def _build_runtime_gaps(
             ),
         ))
 
+    # ── Docker ────────────────────────────────────────────────────────────────
     gaps.append(RuntimeGap(
         label="Docker not configured",
         detail=(
@@ -196,6 +240,10 @@ class DashboardService:
         recent_entries = entries[-_MAX_RECENT:]
 
         # ── Portfolio ──────────────────────────────────────────────────────────
+        portfolio_persistence_status = PortfolioStateStore.status(
+            self._config.portfolio_state_path
+        )
+
         portfolio_summary: PortfolioSummary | None = None
         positions: list[PositionRow] = []
 
@@ -206,7 +254,7 @@ class DashboardService:
                 available_usdt=snap.available_usdt,
                 realized_pnl_usdt=snap.realized_pnl_usdt,
                 open_position_count=len(snap.open_positions),
-                is_persistent=False,
+                is_persistent=portfolio_persistence_status == "ok",
             )
             positions = [
                 PositionRow(
@@ -218,6 +266,37 @@ class DashboardService:
                 )
                 for pos in snap.open_positions.values()
             ]
+
+        # ── Runner state ──────────────────────────────────────────────────────
+        runner_state_snapshot: RunnerStateSnapshot | None = None
+        runner_read = RunnerStateStore.read(self._config.runner_state_path)
+        if runner_read.status == "ok" and runner_read.state is not None:
+            rs = runner_read.state
+            age: float | None = None
+            if runner_read.file_mtime is not None:
+                age = (datetime.now(tz=timezone.utc) - runner_read.file_mtime).total_seconds()
+            runner_state_snapshot = RunnerStateSnapshot(
+                status=str(rs.status),
+                startup_validated=rs.startup_validated,
+                startup_error=rs.startup_error,
+                last_heartbeat=rs.last_heartbeat,
+                last_cycle_start=rs.last_cycle_start,
+                last_cycle_end=rs.last_cycle_end,
+                last_successful_cycle=rs.last_successful_cycle,
+                last_error=rs.last_error,
+                processed_symbols=rs.processed_symbols,
+                updated_at=rs.updated_at,
+                state_age_seconds=age,
+                credential_check=rs.credential_check,
+            )
+
+        # loop_running: True only when runner state is fresh and shows RUNNING.
+        loop_running = (
+            runner_state_snapshot is not None
+            and runner_state_snapshot.status == "running"
+            and runner_state_snapshot.state_age_seconds is not None
+            and runner_state_snapshot.state_age_seconds < _RUNNER_STATE_STALE_SECONDS
+        )
 
         # ── Decisions + fills ─────────────────────────────────────────────────
         recent_decisions = [_entry_to_decision_row(e) for e in reversed(recent_entries)]
@@ -248,8 +327,16 @@ class DashboardService:
             portfolio_available=self._portfolio is not None,
             journal_path=self._journal.path,
             project_root=self._project_root,
+            portfolio_persistence_status=portfolio_persistence_status,
+            credential_check_status=runner_state_snapshot.credential_check if runner_state_snapshot else None,
+            runner_state_status=runner_state_snapshot.status if runner_state_snapshot else None,
         )
-        runtime_gaps = _build_runtime_gaps(self._config, self._portfolio)
+        runtime_gaps = _build_runtime_gaps(
+            self._config,
+            self._portfolio,
+            portfolio_persistence_status=portfolio_persistence_status,
+            runner_state=runner_state_snapshot,
+        )
 
         return DashboardSnapshot(
             mode="PAPER" if self._config.paper_trading else "LIVE",
@@ -257,7 +344,7 @@ class DashboardService:
             as_of=datetime.now(tz=timezone.utc),
             last_journal_write=last_entry.cycle_timestamp if last_entry else None,
             last_pipeline_run=last_entry.cycle_timestamp if last_entry else None,
-            loop_running=False,
+            loop_running=loop_running,
             journal_entry_count=len(entries),
             portfolio=portfolio_summary,
             risk_config=risk_config,
@@ -267,4 +354,6 @@ class DashboardService:
             health=health_items,
             readiness=readiness_items,
             runtime_gaps=runtime_gaps,
+            runner_state=runner_state_snapshot,
+            portfolio_persistence=portfolio_persistence_status,
         )

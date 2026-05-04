@@ -6,19 +6,39 @@ A local operator dashboard for monitoring the BIT trading bot during paper tradi
 
 ## How to Run
 
-Install dashboard dependencies:
+### Docker Compose (recommended)
+
+```bash
+cp .env.example .env   # fill in BYBIT_API_KEY, BYBIT_API_SECRET (optional for paper)
+docker compose up
+```
+
+This starts two containers that share a named volume (`bit_data`):
+
+| Container | Command | Purpose |
+|---|---|---|
+| `bot` | `python -m bit` | BotRunner — pipeline loop, writes to `data/` |
+| `dashboard` | `uvicorn bit.dashboard.app:app` | Dashboard — reads `data/`, serves `http://localhost:8765` |
+
+Stop cleanly: `docker compose down`
+
+View logs: `docker compose logs -f bot` / `docker compose logs -f dashboard`
+
+### Local (without Docker)
+
+Install dependencies:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-Start the dashboard server:
+Start the bot runner in one terminal:
 
 ```bash
-python -m bit.dashboard
+python -m bit
 ```
 
-Or via uvicorn directly:
+Start the dashboard in another terminal:
 
 ```bash
 uvicorn bit.dashboard.app:app --host 127.0.0.1 --port 8765
@@ -51,13 +71,10 @@ The `/api/snapshot` endpoint returns the same data as JSON for scripting or poll
 
 | Data | Reason |
 |---|---|
-| Mark prices / live prices | No market data loop running |
+| Mark prices / live prices | No continuous market data loop |
 | Unrealized PnL on open positions | Requires live mark prices |
-| Loop / scheduler status | No scheduler exists yet |
-| Last heartbeat timestamp | No scheduler exists yet |
-| Docker / container status | No docker-compose.yml yet |
-| API key validity | No live verification call made |
-| Market data connectivity | Not verified at runtime |
+| API key validity (live check) | Checked only at runner startup; shown as WARNING until runner runs |
+| Market data connectivity | Not verified continuously; assumed once credentials pass |
 
 The dashboard **never fakes data**. If something is unavailable, it is shown as `N/A`,
 `UNAVAILABLE`, or `MISSING` with an explanation. No placeholder values.
@@ -137,22 +154,112 @@ It reflects the codebase state, not runtime connectivity.
 
 ---
 
+## v1 Persistence
+
+BIT now persists two runtime state files to disk. Both use atomic writes (write to `.tmp` then rename) to prevent partial writes on crash.
+
+### Portfolio state (`data/portfolio_state.json`)
+
+Written by `PortfolioStateStore.save()` after each fill. Restores:
+- Cash balance
+- Open positions (symbol, quantity, average entry price)
+- Realized PnL
+- Last known mark prices (for unrealized PnL display after restart)
+
+**On restart:**
+```python
+result = PortfolioStateStore.load(config.portfolio_state_path, starting_cash=config.capital_usdt)
+if result.status == "ok":
+    tracker = result.tracker  # positions and cash fully restored
+elif result.status == "corrupt":
+    raise RuntimeError(f"Portfolio state corrupt: {result.error}")
+else:  # not_found — first run
+    tracker = PaperPortfolioTracker(starting_cash=config.capital_usdt)
+```
+
+The dashboard surfaces persistence status:
+- **READY** — state file present and valid
+- **WARNING** — no file yet (first run, or no fills recorded)
+- **MISSING** — file exists but cannot be parsed (inspect/delete to recover)
+
+### Runner state (`data/runner_state.json`)
+
+Written by the run loop (when implemented) on heartbeat, cycle start/end, and shutdown. Contains:
+- `status` — running / stopped / starting / error
+- `startup_validated` — whether startup checks passed
+- `last_heartbeat`, `last_cycle_start`, `last_cycle_end`, `last_successful_cycle`
+- `last_error`, `processed_symbols`
+
+The dashboard reads this file at each snapshot, so it can show loop health even when the runner is in a separate process. State is considered **stale** if the file has not been updated in 120 seconds.
+
+**`credential_check`** field records the startup credential validation result:
+- `"ok"` — API key was validated against Bybit at runner startup
+- `"skipped"` — no credentials configured; paper trading uses public endpoints
+- `"failed: <message>"` — credentials were rejected; runner will not start
+- `null` — runner has not yet started
+
+### Limitations (v1)
+
+- Portfolio state is saved **only when `PortfolioStateStore.save()` is called explicitly** after a fill. The tracker itself does not auto-save.
+- No background persistence thread — saves are synchronous and caller-controlled.
+- If the process crashes mid-fill (between `apply_fill` and `save`), the last fill may be lost. This is acceptable for v1 paper trading.
+- Runner state is written by the runner, not the dashboard. The dashboard is read-only for both files.
+
+---
+
 ## What Remains Before Continuous Paper Trading
 
-1. **Scheduler / run loop** — Add a `Runner` that calls `pipeline.run(symbol)` on a
-   configurable interval for all symbols. This is the most critical blocker.
+1. ~~**Scheduler / run loop**~~ — **Done.** `BotRunner` in `bit.runner` runs the pipeline
+   loop on a configurable interval. Start with `python -m bit` or `docker compose up bot`.
 
-2. **Portfolio state persistence** — `PaperPortfolioTracker` resets on restart.
-   Add a JSON sidecar file that saves/restores state between runs.
+2. ~~**Portfolio state persistence**~~ — **Done.** `PortfolioStateStore` saves/restores
+   positions, cash, realized PnL, and last mark prices to `data/portfolio_state.json`.
 
-3. **Verified market data connection** — Start the loop with a real API key and confirm
-   `get_klines()` / `get_ticker()` return real data.
+3. **Verified market data connection** — Start the runner with a real API key; credentials
+   are validated at startup via `GET /v5/user/query-api`. Confirm `get_klines()` /
+   `get_ticker()` return real data in the journal.
 
-4. **Process supervision** — The dashboard cannot tell if the bot loop has stalled.
-   A heartbeat file or a shared timestamp is needed.
+4. ~~**Process supervision heartbeat**~~ — **Done.** `RunnerStateStore` writes loop status to
+   `data/runner_state.json` on every heartbeat and cycle. The dashboard reads this file and
+   marks state stale after 120 seconds without an update.
 
-5. **Docker (optional but recommended)** — For production paper trading, a
-   `docker-compose.yml` with the bot and dashboard as separate services.
+5. ~~**Docker**~~ — **Done.** `docker-compose.yml` defines `bot` and `dashboard` services
+   with shared named volume, healthchecks, and `restart: unless-stopped`.
+
+### Container Health Checks
+
+**Bot container** (`python -m bit.healthcheck`):
+Reads `runner_state.json`. Healthy if `status == "running"` and file is newer than
+`run_interval_seconds × 3` seconds. Exits 1 if file is missing, corrupt, stalled, or shows
+an error/stopped status.
+
+**Dashboard container** (`http://localhost:8765/health`):
+Simple HTTP check — healthy if `/health` returns HTTP 200.
+
+### Authenticated Startup Validation
+
+When `BYBIT_API_KEY` and `BYBIT_API_SECRET` are set, the runner calls `GET /v5/user/query-api`
+at startup before the first pipeline cycle. The result is written to `RunnerState.credential_check`:
+
+- `"ok"` — key is valid; runner continues normally
+- `"failed: ..."` — key rejected by Bybit; runner stops with an error
+- `"skipped"` — no credentials; paper trading uses public endpoints only
+
+If credentials are absent but paper trading is enabled, the runner still starts (public endpoints
+are sufficient for klines and ticker data).
+
+### Out of Scope in v1
+
+- Live (non-paper) trading — `ExecutionEngine._live_execute()` raises `NotImplementedError`
+- Continuous live mark prices for unrealized PnL — requires a WebSocket ticker feed
+- Autonomous ML optimization — no ML models in v1
+
+---
+
+## Paper Trading Operations
+
+For the 30-day validation run — pre-flight checklist, daily operations, incident
+handling, weekly review, and success criteria — see `docs/paper-trading-runbook.md`.
 
 ---
 

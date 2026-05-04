@@ -19,12 +19,14 @@ from bit.dashboard.models import (
     DecisionRow,
     FillRow,
     HealthItem,
+    PersistenceStatus,
     PortfolioSummary,
     PositionRow,
     ReadinessItem,
     ReadinessStatus,
     RiskConfig,
     RuntimeGap,
+    RunnerStateSnapshot,
     ServiceStatus,
 )
 from bit.dashboard.service import _entry_to_decision_row, _entry_to_fill_row
@@ -288,3 +290,156 @@ class TestDashboardSnapshot:
         )
         assert pos.mark_price is None
         assert pos.unrealized_pnl is None
+
+    def test_snapshot_has_persistence_defaults(self):
+        snap = DashboardSnapshot(
+            mode="PAPER",
+            symbols=[],
+            as_of=_TS,
+            last_journal_write=None,
+            last_pipeline_run=None,
+            loop_running=False,
+            journal_entry_count=0,
+            portfolio=None,
+            risk_config=self._minimal_risk_config(),
+            open_positions=[],
+            recent_decisions=[],
+            recent_fills=[],
+            health=[],
+            readiness=[],
+            runtime_gaps=[],
+        )
+        assert snap.runner_state is None
+        assert snap.portfolio_persistence == PersistenceStatus.NOT_FOUND
+
+
+# ── PersistenceStatus ──────────────────────────────────────────────────────────
+
+class TestPersistenceStatus:
+    def test_ok_value(self):
+        assert PersistenceStatus.OK == "ok"
+
+    def test_not_found_value(self):
+        assert PersistenceStatus.NOT_FOUND == "not_found"
+
+    def test_corrupt_value(self):
+        assert PersistenceStatus.CORRUPT == "corrupt"
+
+
+# ── RunnerStateSnapshot ────────────────────────────────────────────────────────
+
+class TestRunnerStateSnapshot:
+    def test_minimal_construction(self):
+        snap = RunnerStateSnapshot(
+            status="running",
+            startup_validated=True,
+            startup_error=None,
+            last_heartbeat=None,
+            last_cycle_start=None,
+            last_cycle_end=None,
+            last_successful_cycle=None,
+            last_error=None,
+            processed_symbols=[],
+            updated_at=_TS,
+        )
+        assert snap.status == "running"
+        assert snap.startup_validated is True
+        assert snap.state_age_seconds is None
+
+    def test_credential_check_defaults_to_none(self):
+        snap = RunnerStateSnapshot(
+            status="running",
+            startup_validated=True,
+            startup_error=None,
+            last_heartbeat=None,
+            last_cycle_start=None,
+            last_cycle_end=None,
+            last_successful_cycle=None,
+            last_error=None,
+            processed_symbols=[],
+            updated_at=_TS,
+        )
+        assert snap.credential_check is None
+
+    def test_credential_check_ok(self):
+        snap = RunnerStateSnapshot(
+            status="running",
+            startup_validated=True,
+            startup_error=None,
+            last_heartbeat=None,
+            last_cycle_start=None,
+            last_cycle_end=None,
+            last_successful_cycle=None,
+            last_error=None,
+            processed_symbols=[],
+            updated_at=_TS,
+            credential_check="ok",
+        )
+        assert snap.credential_check == "ok"
+
+    def test_credential_check_skipped(self):
+        snap = RunnerStateSnapshot(
+            status="running",
+            startup_validated=True,
+            startup_error=None,
+            last_heartbeat=None,
+            last_cycle_start=None,
+            last_cycle_end=None,
+            last_successful_cycle=None,
+            last_error=None,
+            processed_symbols=[],
+            updated_at=_TS,
+            credential_check="skipped",
+        )
+        assert snap.credential_check == "skipped"
+
+    def test_credential_check_serialises_in_json(self):
+        snap = RunnerStateSnapshot(
+            status="running",
+            startup_validated=True,
+            startup_error=None,
+            last_heartbeat=None,
+            last_cycle_start=None,
+            last_cycle_end=None,
+            last_successful_cycle=None,
+            last_error=None,
+            processed_symbols=[],
+            updated_at=_TS,
+            credential_check="ok",
+        )
+        data = snap.model_dump(mode="json")
+        assert data["credential_check"] == "ok"
+
+    def test_with_state_age(self):
+        snap = RunnerStateSnapshot(
+            status="stopped",
+            startup_validated=False,
+            startup_error="timeout",
+            last_heartbeat=_TS,
+            last_cycle_start=_TS,
+            last_cycle_end=_TS,
+            last_successful_cycle=_TS,
+            last_error="timeout",
+            processed_symbols=["BTCUSDT"],
+            updated_at=_TS,
+            state_age_seconds=45.5,
+        )
+        assert snap.state_age_seconds == 45.5
+        assert snap.processed_symbols == ["BTCUSDT"]
+
+    def test_json_serialises(self):
+        snap = RunnerStateSnapshot(
+            status="running",
+            startup_validated=True,
+            startup_error=None,
+            last_heartbeat=_TS,
+            last_cycle_start=None,
+            last_cycle_end=None,
+            last_successful_cycle=None,
+            last_error=None,
+            processed_symbols=["ETHUSDT"],
+            updated_at=_TS,
+        )
+        data = snap.model_dump(mode="json")
+        assert data["status"] == "running"
+        assert data["processed_symbols"] == ["ETHUSDT"]

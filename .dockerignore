@@ -1,0 +1,44 @@
+# BIT — Docker build context exclusions
+#
+# Keep the build context small and avoid leaking secrets or test artifacts
+# into the image.
+
+# Version control
+.git/
+.gitignore
+
+# Python cache / compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Test suite — not needed in the image
+tests/
+
+# Runtime data — mounted as a volume; never bake in
+data/
+
+# Secrets — NEVER copy into the image
+.env
+*.env
+
+# Docs and tooling
+docs/
+*.md
+!README.md
+
+# IDE / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Coverage / linting artefacts
+.coverage
+htmlcov/
+.ruff_cache/

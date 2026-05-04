@@ -11,10 +11,13 @@ Verifies:
 - mode = "PAPER" when paper_trading=True; "LIVE" when False
 - last_journal_write = most recent entry timestamp; None when empty
 - runtime_gaps always present
-- health items always present (9 items)
-- readiness items always present (8 items)
+- health items always present (10 items)
+- readiness items always present (10 items)
 - No exceptions on missing data (all None-safe)
 - Decisions limited to last 20
+- Runner state read from persisted file when available
+- Portfolio persistence status surfaced in snapshot
+- loop_running derived from runner state file
 """
 
 from datetime import datetime, timezone
@@ -32,6 +35,7 @@ from bit.domain.execution import Fill
 from bit.domain.journal import JournalEntry
 from bit.services.journal import JournalLearningStore
 from bit.services.paper_portfolio import PaperPortfolioTracker
+from bit.services.runner_state import RunnerState, RunnerStateStore, RunnerStatus
 
 _TS_BASE = datetime(2026, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
 
@@ -41,8 +45,11 @@ def _ts(offset_seconds: int = 0) -> datetime:
     return _TS_BASE.replace(second=0) + timedelta(seconds=offset_seconds)
 
 
-def _config(**kwargs) -> BITConfig:
+def _config(tmp_path: Path | None = None, **kwargs) -> BITConfig:
     defaults = dict(bybit_api_key="", bybit_api_secret="", paper_trading=True)
+    if tmp_path is not None:
+        defaults["portfolio_state_path"] = tmp_path / "portfolio_state.json"
+        defaults["runner_state_path"] = tmp_path / "runner_state.json"
     defaults.update(kwargs)
     return BITConfig(**defaults)
 
@@ -85,7 +92,7 @@ def _make_service(
     portfolio: PaperPortfolioTracker | None = None,
     paper_trading: bool = True,
 ) -> DashboardService:
-    config = _config(paper_trading=paper_trading)
+    config = _config(tmp_path=tmp_path, paper_trading=paper_trading)
     journal = _make_journal(tmp_path, entries or [])
     return DashboardService(
         config=config,
@@ -329,13 +336,13 @@ class TestRiskConfig:
 # ── Health and readiness ───────────────────────────────────────────────────
 
 class TestHealthAndReadiness:
-    def test_health_has_nine_items(self, tmp_path):
+    def test_health_has_ten_items(self, tmp_path):
         service = _make_service(tmp_path)
-        assert len(service.build_snapshot().health) == 9
+        assert len(service.build_snapshot().health) == 10
 
-    def test_readiness_has_eight_items(self, tmp_path):
+    def test_readiness_has_ten_items(self, tmp_path):
         service = _make_service(tmp_path)
-        assert len(service.build_snapshot().readiness) == 8
+        assert len(service.build_snapshot().readiness) == 10
 
     def test_health_items_are_health_item_type(self, tmp_path):
         from bit.dashboard.models import HealthItem
@@ -349,10 +356,10 @@ class TestHealthAndReadiness:
         for item in service.build_snapshot().readiness:
             assert isinstance(item, ReadinessItem)
 
-    def test_scheduler_health_is_missing(self, tmp_path):
+    def test_scheduler_health_is_implemented(self, tmp_path):
         service = _make_service(tmp_path)
         item = next(i for i in service.build_snapshot().health if i.name == "Scheduler / Loop")
-        assert item.status == ServiceStatus.MISSING
+        assert item.status == ServiceStatus.IMPLEMENTED
 
     def test_scheduler_readiness_is_missing(self, tmp_path):
         service = _make_service(tmp_path)
@@ -386,10 +393,11 @@ class TestRuntimeGaps:
         gaps = service.build_snapshot().runtime_gaps
         assert any("not injected" in g.label.lower() for g in gaps)
 
-    def test_in_memory_gap_when_portfolio_injected(self, tmp_path):
+    def test_in_memory_gap_when_portfolio_injected_no_persistence(self, tmp_path):
         tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
         service = _make_service(tmp_path, portfolio=tracker)
         gaps = service.build_snapshot().runtime_gaps
+        # No state file yet → "in-memory only (not yet persisted)"
         assert any("in-memory" in g.label.lower() for g in gaps)
 
     def test_docker_gap_always_present(self, tmp_path):
@@ -401,3 +409,122 @@ class TestRuntimeGaps:
         service = _make_service(tmp_path)
         for gap in service.build_snapshot().runtime_gaps:
             assert gap.detail, f"Gap {gap.label!r} has no detail"
+
+
+# ── Runner state from persisted file ──────────────────────────────────────────
+
+class TestRunnerStatePersistence:
+    def test_runner_state_none_when_no_file(self, tmp_path):
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.runner_state is None
+
+    def test_runner_state_populated_from_file(self, tmp_path):
+        state = RunnerState(
+            updated_at=_TS_BASE,
+            status=RunnerStatus.RUNNING,
+            startup_validated=True,
+            processed_symbols=["BTCUSDT"],
+        )
+        RunnerStateStore.write(state, tmp_path / "runner_state.json")
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.runner_state is not None
+        assert snap.runner_state.status == "running"
+        assert snap.runner_state.startup_validated is True
+        assert snap.runner_state.processed_symbols == ["BTCUSDT"]
+
+    def test_loop_running_true_when_state_is_recent_running(self, tmp_path):
+        from datetime import timedelta
+        recent_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=10)
+        state = RunnerState(
+            updated_at=recent_ts,
+            status=RunnerStatus.RUNNING,
+        )
+        RunnerStateStore.write(state, tmp_path / "runner_state.json")
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.loop_running is True
+
+    def test_loop_running_false_when_state_is_stopped(self, tmp_path):
+        from datetime import timedelta
+        recent_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=10)
+        state = RunnerState(
+            updated_at=recent_ts,
+            status=RunnerStatus.STOPPED,
+        )
+        RunnerStateStore.write(state, tmp_path / "runner_state.json")
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.loop_running is False
+
+    def test_loop_running_false_when_no_file(self, tmp_path):
+        service = _make_service(tmp_path)
+        assert service.build_snapshot().loop_running is False
+
+    def test_runner_state_includes_state_age(self, tmp_path):
+        state = RunnerState(updated_at=_TS_BASE, status=RunnerStatus.RUNNING)
+        RunnerStateStore.write(state, tmp_path / "runner_state.json")
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.runner_state.state_age_seconds is not None
+        assert snap.runner_state.state_age_seconds >= 0
+
+    def test_runner_state_shows_in_runtime_gaps(self, tmp_path):
+        from datetime import timedelta
+        recent_ts = datetime.now(tz=timezone.utc) - timedelta(seconds=5)
+        state = RunnerState(
+            updated_at=recent_ts,
+            status=RunnerStatus.RUNNING,
+            processed_symbols=["BTCUSDT"],
+        )
+        RunnerStateStore.write(state, tmp_path / "runner_state.json")
+        service = _make_service(tmp_path)
+        gaps = service.build_snapshot().runtime_gaps
+        # Runner state gap should mention status
+        assert any("runner" in g.label.lower() or "running" in g.label.lower() for g in gaps)
+
+    def test_corrupt_runner_file_gives_none_state(self, tmp_path):
+        (tmp_path / "runner_state.json").write_text("garbage", encoding="utf-8")
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.runner_state is None
+
+
+# ── Portfolio persistence status ──────────────────────────────────────────────
+
+class TestPortfolioPersistenceStatus:
+    def test_not_found_when_no_file(self, tmp_path):
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.portfolio_persistence == "not_found"
+
+    def test_ok_when_file_present(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.portfolio_persistence == "ok"
+
+    def test_corrupt_when_file_bad(self, tmp_path):
+        (tmp_path / "portfolio_state.json").write_text("garbage", encoding="utf-8")
+        service = _make_service(tmp_path)
+        snap = service.build_snapshot()
+        assert snap.portfolio_persistence == "corrupt"
+
+    def test_is_persistent_true_when_state_file_ok(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path, portfolio=tracker)
+        snap = service.build_snapshot()
+        assert snap.portfolio is not None
+        assert snap.portfolio.is_persistent is True
+
+    def test_is_persistent_false_when_no_state_file(self, tmp_path):
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        service = _make_service(tmp_path, portfolio=tracker)
+        snap = service.build_snapshot()
+        assert snap.portfolio is not None
+        assert snap.portfolio.is_persistent is False

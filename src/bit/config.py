@@ -7,6 +7,7 @@ All thresholds and limits are configurable without code changes.
 """
 
 from decimal import Decimal
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -62,6 +63,31 @@ class BITConfig(BaseSettings):
     paper_slippage_pct: Decimal = Field(
         default=Decimal("0.0005"),
         description="Adverse price slippage applied to paper fills (0.0005 = 0.05%).",
+    )
+
+    # ── Persistence paths ─────────────────────────────────────────────────────
+    portfolio_state_path: Path = Field(
+        default=Path("data/portfolio_state.json"),
+        description=(
+            "Path to the paper portfolio state JSON file. "
+            "Written after each fill; read at startup to restore positions."
+        ),
+    )
+    runner_state_path: Path = Field(
+        default=Path("data/runner_state.json"),
+        description=(
+            "Path to the runner state JSON file. "
+            "Written by the run loop; read by the dashboard to show loop health."
+        ),
+    )
+
+    # ── Run loop ──────────────────────────────────────────────────────────────
+    run_interval_seconds: int = Field(
+        default=300,
+        description=(
+            "Seconds to wait between pipeline cycles. "
+            "Default 300 matches the 5m candle cadence."
+        ),
     )
 
     # ── Signal thresholds ─────────────────────────────────────────────────────
