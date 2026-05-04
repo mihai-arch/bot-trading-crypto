@@ -119,7 +119,7 @@ class TestBuildSnapshotBasic:
         service = _make_service(tmp_path, paper_trading=False)
         assert service.build_snapshot().mode == "LIVE"
 
-    def test_loop_running_always_false(self, tmp_path):
+    def test_loop_running_false_when_no_state_file(self, tmp_path):
         service = _make_service(tmp_path)
         assert service.build_snapshot().loop_running is False
 
@@ -445,6 +445,37 @@ class TestRunnerStatePersistence:
         service = _make_service(tmp_path)
         snap = service.build_snapshot()
         assert snap.loop_running is True
+
+    def test_loop_running_true_within_interval_threshold(self, tmp_path):
+        """loop_running stays True for files up to run_interval_seconds + 60 seconds old."""
+        import os
+        import time
+        from datetime import timedelta
+        cfg = _config(tmp_path=tmp_path, run_interval_seconds=300)
+        state = RunnerState(updated_at=_TS_BASE, status=RunnerStatus.RUNNING)
+        state_path = tmp_path / "runner_state.json"
+        RunnerStateStore.write(state, state_path)
+        # Backdate file mtime to 350s ago — inside the 360s window (300 + 60)
+        target_mtime = time.time() - 350
+        os.utime(state_path, (target_mtime, target_mtime))
+        journal = _make_journal(tmp_path, [])
+        service = DashboardService(config=cfg, journal=journal, project_root=tmp_path)
+        assert service.build_snapshot().loop_running is True
+
+    def test_loop_running_false_when_beyond_threshold(self, tmp_path):
+        """loop_running is False when file is older than run_interval_seconds + 60."""
+        import os
+        import time
+        cfg = _config(tmp_path=tmp_path, run_interval_seconds=300)
+        state = RunnerState(updated_at=_TS_BASE, status=RunnerStatus.RUNNING)
+        state_path = tmp_path / "runner_state.json"
+        RunnerStateStore.write(state, state_path)
+        # Backdate file mtime to 370s ago — beyond the 360s window (300 + 60)
+        target_mtime = time.time() - 370
+        os.utime(state_path, (target_mtime, target_mtime))
+        journal = _make_journal(tmp_path, [])
+        service = DashboardService(config=cfg, journal=journal, project_root=tmp_path)
+        assert service.build_snapshot().loop_running is False
 
     def test_loop_running_false_when_state_is_stopped(self, tmp_path):
         from datetime import timedelta

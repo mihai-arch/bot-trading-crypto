@@ -7,10 +7,10 @@ Verifies:
 - Portfolio: always WARNING (in-memory limitation or not injected)
 - Portfolio persistence: READY when file ok, WARNING when not_found, MISSING when corrupt
 - Journal writable: READY when dir is writable; MISSING when not writable
-- API key: MISSING when absent, WARNING when present
+- API key: WARNING always (paper trading uses public endpoints; MISSING removed)
 - Credential check: READY when "ok", MISSING when "failed:", WARNING when None or "skipped"
 - Scheduler: MISSING when no runner state; READY when "running"; WARNING when stopped/starting
-- Market connectivity: MISSING when no key, WARNING when key present
+- Market connectivity: READY when journal has data, WARNING when no cycles yet
 - Journal data: READY when entries > 0, WARNING when 0
 - Docker: WARNING when absent, READY when present
 - Each item has a unique key
@@ -126,10 +126,11 @@ class TestJournalWritableCheck:
 
 
 class TestApiKeyCheck:
-    def test_no_api_key_is_missing(self, tmp_path):
+    def test_no_api_key_is_warning(self, tmp_path):
+        # Paper trading uses public Bybit endpoints — missing key is WARNING, not MISSING.
         items = _evaluate(config=_config(bybit_api_key=""), tmp_path=tmp_path)
         item = next(i for i in items if i.key == "api_key")
-        assert item.status == ReadinessStatus.MISSING
+        assert item.status == ReadinessStatus.WARNING
 
     def test_api_key_present_is_warning(self, tmp_path):
         items = _evaluate(
@@ -147,10 +148,10 @@ class TestApiKeyCheck:
         item = next(i for i in items if i.key == "api_key")
         assert "not" in item.detail.lower() and ("valid" in item.detail.lower() or "verif" in item.detail.lower())
 
-    def test_api_key_missing_detail_mentions_env(self, tmp_path):
+    def test_api_key_warning_detail_mentions_public_endpoints(self, tmp_path):
         items = _evaluate(config=_config(bybit_api_key=""), tmp_path=tmp_path)
         item = next(i for i in items if i.key == "api_key")
-        assert ".env" in item.detail or "BYBIT_API_KEY" in item.detail
+        assert "public" in item.detail.lower() or "BYBIT_API_KEY" in item.detail
 
 
 class TestSchedulerCheck:
@@ -243,26 +244,36 @@ class TestCredentialCheckItem:
 
 
 class TestMarketConnectivityCheck:
-    def test_no_key_is_missing(self, tmp_path):
-        items = _evaluate(config=_config(bybit_api_key=""), tmp_path=tmp_path)
+    def test_no_data_is_warning(self, tmp_path):
+        # No journal entries yet → connectivity not confirmed; key presence irrelevant.
+        items = _evaluate(config=_config(bybit_api_key=""), journal_entry_count=0, tmp_path=tmp_path)
         item = next(i for i in items if i.key == "market_connectivity")
-        assert item.status == ReadinessStatus.MISSING
+        assert item.status == ReadinessStatus.WARNING
 
-    def test_key_present_is_warning(self, tmp_path):
+    def test_with_key_and_no_data_is_warning(self, tmp_path):
         items = _evaluate(
             config=_config(bybit_api_key="abc123", bybit_api_secret="secret"),
+            journal_entry_count=0,
             tmp_path=tmp_path,
         )
         item = next(i for i in items if i.key == "market_connectivity")
         assert item.status == ReadinessStatus.WARNING
 
-    def test_warning_detail_says_not_confirmed(self, tmp_path):
-        items = _evaluate(
-            config=_config(bybit_api_key="abc123", bybit_api_secret="secret"),
-            tmp_path=tmp_path,
-        )
+    def test_with_journal_data_is_ready(self, tmp_path):
+        # Completed cycles prove connectivity, regardless of API key.
+        items = _evaluate(journal_entry_count=3, tmp_path=tmp_path)
         item = next(i for i in items if i.key == "market_connectivity")
-        assert "confirm" in item.detail.lower() or "verif" in item.detail.lower()
+        assert item.status == ReadinessStatus.READY
+
+    def test_warning_detail_says_start_runner(self, tmp_path):
+        items = _evaluate(journal_entry_count=0, tmp_path=tmp_path)
+        item = next(i for i in items if i.key == "market_connectivity")
+        assert "confirm" in item.detail.lower() or "start" in item.detail.lower()
+
+    def test_ready_label_mentions_cycle_count(self, tmp_path):
+        items = _evaluate(journal_entry_count=5, tmp_path=tmp_path)
+        item = next(i for i in items if i.key == "market_connectivity")
+        assert "5" in item.label
 
 
 class TestJournalDataCheck:

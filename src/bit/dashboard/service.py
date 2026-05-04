@@ -12,6 +12,7 @@ No fake data. Fields that cannot be populated are None or empty.
 Callers (templates, JSON endpoint) must handle None explicitly.
 """
 
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -34,9 +35,6 @@ from .models import (
     RunnerStateSnapshot,
 )
 from .readiness import ReadinessEvaluator
-
-# Runner state is considered stale if the file has not been updated in this many seconds.
-_RUNNER_STATE_STALE_SECONDS = 120
 
 _MAX_RECENT = 20
 
@@ -183,7 +181,10 @@ def _build_runtime_gaps(
     if not config.bybit_api_key:
         gaps.append(RuntimeGap(
             label="Bybit API key not configured",
-            detail="Set BYBIT_API_KEY in .env. Required to fetch live market data.",
+            detail=(
+                "Paper trading uses Bybit public endpoints — no API key required. "
+                "Set BYBIT_API_KEY only for authenticated startup validation."
+            ),
         ))
     else:
         gaps.append(RuntimeGap(
@@ -195,13 +196,22 @@ def _build_runtime_gaps(
         ))
 
     # ── Docker ────────────────────────────────────────────────────────────────
-    gaps.append(RuntimeGap(
-        label="Docker not configured",
-        detail=(
-            "No docker-compose.yml found. Container health monitoring and "
-            "process supervision are not available."
-        ),
-    ))
+    if os.path.exists("/.dockerenv"):
+        gaps.append(RuntimeGap(
+            label="Running inside Docker container",
+            detail=(
+                "Process supervised by Docker Compose with healthchecks "
+                "and restart: unless-stopped."
+            ),
+        ))
+    else:
+        gaps.append(RuntimeGap(
+            label="Docker not configured",
+            detail=(
+                "No docker-compose.yml found. Container health monitoring and "
+                "process supervision are not available."
+            ),
+        ))
 
     return gaps
 
@@ -291,11 +301,14 @@ class DashboardService:
             )
 
         # loop_running: True only when runner state is fresh and shows RUNNING.
+        # Use run_interval_seconds + 60 so the flag stays True during the normal
+        # sleep between cycles (avoiding false negatives at 300s interval).
+        _stale_seconds = self._config.run_interval_seconds + 60
         loop_running = (
             runner_state_snapshot is not None
             and runner_state_snapshot.status == "running"
             and runner_state_snapshot.state_age_seconds is not None
-            and runner_state_snapshot.state_age_seconds < _RUNNER_STATE_STALE_SECONDS
+            and runner_state_snapshot.state_age_seconds < _stale_seconds
         )
 
         # ── Decisions + fills ─────────────────────────────────────────────────

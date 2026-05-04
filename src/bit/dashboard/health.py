@@ -164,6 +164,13 @@ class HealthChecker:
 
     @staticmethod
     def _probe_docker(project_root: Path) -> HealthItem:
+        # /.dockerenv is present in all Docker containers — reliable inside-container signal.
+        if os.path.exists("/.dockerenv"):
+            return HealthItem(
+                name="Docker",
+                status=ServiceStatus.IMPLEMENTED,
+                detail="Running inside Docker container (compose file is on the host).",
+            )
         for name in (
             "docker-compose.yml",
             "docker-compose.yaml",
