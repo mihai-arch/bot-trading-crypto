@@ -50,7 +50,7 @@ class ReadinessEvaluator:
         """
         return [
             self._check_config(config),
-            self._check_portfolio(portfolio_available),
+            self._check_portfolio(portfolio_available, portfolio_persistence_status),
             self._check_portfolio_persistence(portfolio_persistence_status, config.portfolio_state_path),
             self._check_journal_writable(journal_path),
             self._check_api_key(config),
@@ -76,7 +76,10 @@ class ReadinessEvaluator:
         )
 
     @staticmethod
-    def _check_portfolio(portfolio_available: bool) -> ReadinessItem:
+    def _check_portfolio(
+        portfolio_available: bool,
+        portfolio_persistence_status: str = "not_found",
+    ) -> ReadinessItem:
         if portfolio_available:
             return ReadinessItem(
                 key="portfolio",
@@ -85,6 +88,17 @@ class ReadinessEvaluator:
                 detail=(
                     "PaperPortfolioTracker is in-memory only. "
                     "State resets on process restart — no persistence yet."
+                ),
+            )
+        if portfolio_persistence_status == "ok":
+            return ReadinessItem(
+                key="portfolio",
+                label="Portfolio data from persisted snapshot",
+                status=ReadinessStatus.WARNING,
+                detail=(
+                    "Dashboard reads portfolio_state.json written by the bot. "
+                    "Data reflects the last saved state. "
+                    "Pass the live tracker via create_app() for real-time portfolio data."
                 ),
             )
         return ReadinessItem(

@@ -111,6 +111,25 @@ class TestPortfolioCheck:
         item = next(i for i in items if i.key == "portfolio")
         assert "inject" in item.detail.lower() or "create_app" in item.detail
 
+    def test_portfolio_persisted_snapshot_is_warning(self, tmp_path):
+        """No live tracker but persisted file available → WARNING with distinct label."""
+        items = _evaluate(
+            portfolio_available=False,
+            portfolio_persistence_status="ok",
+            tmp_path=tmp_path,
+        )
+        item = next(i for i in items if i.key == "portfolio")
+        assert item.status == ReadinessStatus.WARNING
+
+    def test_portfolio_persisted_label_mentions_snapshot(self, tmp_path):
+        items = _evaluate(
+            portfolio_available=False,
+            portfolio_persistence_status="ok",
+            tmp_path=tmp_path,
+        )
+        item = next(i for i in items if i.key == "portfolio")
+        assert "persisted" in item.label.lower() or "snapshot" in item.label.lower()
+
 
 class TestJournalWritableCheck:
     def test_writable_dir_is_ready(self, tmp_path):

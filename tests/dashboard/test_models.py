@@ -313,6 +313,63 @@ class TestDashboardSnapshot:
         assert snap.portfolio_persistence == PersistenceStatus.NOT_FOUND
 
 
+# ── PortfolioSummary data_source / saved_at ────────────────────────────────────
+
+class TestPortfolioSummaryDataSource:
+    def test_data_source_defaults_to_none(self):
+        ps = PortfolioSummary(
+            total_equity_usdt=Decimal("500"),
+            available_usdt=Decimal("500"),
+            realized_pnl_usdt=Decimal("0"),
+            open_position_count=0,
+        )
+        assert ps.data_source is None
+
+    def test_saved_at_defaults_to_none(self):
+        ps = PortfolioSummary(
+            total_equity_usdt=Decimal("500"),
+            available_usdt=Decimal("500"),
+            realized_pnl_usdt=Decimal("0"),
+            open_position_count=0,
+        )
+        assert ps.saved_at is None
+
+    def test_data_source_live(self):
+        ps = PortfolioSummary(
+            total_equity_usdt=Decimal("500"),
+            available_usdt=Decimal("500"),
+            realized_pnl_usdt=Decimal("0"),
+            open_position_count=0,
+            data_source="live",
+        )
+        assert ps.data_source == "live"
+
+    def test_data_source_persisted_with_saved_at(self):
+        ps = PortfolioSummary(
+            total_equity_usdt=Decimal("500"),
+            available_usdt=Decimal("500"),
+            realized_pnl_usdt=Decimal("0"),
+            open_position_count=0,
+            data_source="persisted",
+            saved_at=_TS,
+        )
+        assert ps.data_source == "persisted"
+        assert ps.saved_at == _TS
+
+    def test_json_serialises_data_source_and_saved_at(self):
+        ps = PortfolioSummary(
+            total_equity_usdt=Decimal("500"),
+            available_usdt=Decimal("500"),
+            realized_pnl_usdt=Decimal("0"),
+            open_position_count=0,
+            data_source="persisted",
+            saved_at=_TS,
+        )
+        data = ps.model_dump(mode="json")
+        assert data["data_source"] == "persisted"
+        assert data["saved_at"] is not None
+
+
 # ── PersistenceStatus ──────────────────────────────────────────────────────────
 
 class TestPersistenceStatus:

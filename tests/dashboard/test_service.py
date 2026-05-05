@@ -559,3 +559,96 @@ class TestPortfolioPersistenceStatus:
         snap = service.build_snapshot()
         assert snap.portfolio is not None
         assert snap.portfolio.is_persistent is False
+
+
+# ── Portfolio fallback from persisted file ─────────────────────────────────
+
+class TestPortfolioFallback:
+    def test_portfolio_none_when_no_tracker_no_file(self, tmp_path):
+        service = _make_service(tmp_path, portfolio=None)
+        snap = service.build_snapshot()
+        assert snap.portfolio is None
+        assert snap.open_positions == []
+
+    def test_portfolio_data_source_persisted_when_file_exists(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path, portfolio=None)
+        snap = service.build_snapshot()
+        assert snap.portfolio is not None
+        assert snap.portfolio.data_source == "persisted"
+
+    def test_portfolio_data_source_live_when_tracker_injected(self, tmp_path):
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        service = _make_service(tmp_path, portfolio=tracker)
+        snap = service.build_snapshot()
+        assert snap.portfolio is not None
+        assert snap.portfolio.data_source == "live"
+
+    def test_portfolio_saved_at_set_from_file(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path, portfolio=None)
+        snap = service.build_snapshot()
+        assert snap.portfolio is not None
+        assert snap.portfolio.saved_at is not None
+
+    def test_portfolio_saved_at_none_for_live_tracker(self, tmp_path):
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        service = _make_service(tmp_path, portfolio=tracker)
+        snap = service.build_snapshot()
+        assert snap.portfolio.saved_at is None
+
+    def test_open_positions_from_persisted_file(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        fill = Fill(
+            order_id=str(uuid4()),
+            symbol=Symbol.BTCUSDT,
+            side=OrderSide.BUY,
+            filled_qty=Decimal("0.001"),
+            avg_fill_price=Decimal("60000"),
+            fee_usdt=Decimal("0.06"),
+            slippage_usdt=Decimal("0.03"),
+            filled_at=_TS_BASE,
+            is_paper=True,
+        )
+        tracker.apply_fill(fill)
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path, portfolio=None)
+        snap = service.build_snapshot()
+        assert len(snap.open_positions) == 1
+        assert snap.open_positions[0].symbol == "BTCUSDT"
+
+    def test_portfolio_none_when_file_corrupt(self, tmp_path):
+        (tmp_path / "portfolio_state.json").write_text("garbage", encoding="utf-8")
+        service = _make_service(tmp_path, portfolio=None)
+        snap = service.build_snapshot()
+        assert snap.portfolio is None
+
+    def test_runtime_gap_persisted_label_when_file_ok(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path, portfolio=None)
+        gaps = service.build_snapshot().runtime_gaps
+        assert any("persisted snapshot" in g.label.lower() for g in gaps)
+
+    def test_live_tracker_preferred_over_file(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path, portfolio=tracker)
+        snap = service.build_snapshot()
+        assert snap.portfolio.data_source == "live"
+
+    def test_persisted_equity_matches_saved_state(self, tmp_path):
+        from bit.services.portfolio_store import PortfolioStateStore
+        tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
+        PortfolioStateStore.save(tracker, tmp_path / "portfolio_state.json")
+        service = _make_service(tmp_path, portfolio=None)
+        snap = service.build_snapshot()
+        assert snap.portfolio.total_equity_usdt == Decimal("500")
+        assert snap.portfolio.available_usdt == Decimal("500")

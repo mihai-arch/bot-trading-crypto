@@ -9,8 +9,8 @@ Verifies:
 - last_cycle_start / last_cycle_end / last_successful_cycle updated after cycle
 - last_heartbeat updated each cycle
 - processed_symbols reflects symbols that completed successfully
-- Fill triggers PortfolioStateStore.save()
-- No fill → portfolio NOT saved
+- Fill triggers PortfolioStateStore.save() (within the cycle)
+- Portfolio saved at end of every cycle (even without fills) to keep saved_at fresh
 - Per-symbol pipeline error captured in last_error without crashing loop
 - Remaining symbols still processed after one symbol errors
 - stop() sets STOPPING, then start() returns and final state is STOPPED
@@ -239,9 +239,9 @@ class TestCycleExecution:
 
 class TestPortfolioSaveOnFill:
     @pytest.mark.asyncio
-    async def test_fill_triggers_portfolio_save(self, tmp_path):
+    async def test_fill_triggers_portfolio_save_within_cycle(self, tmp_path):
+        """A fill saves the portfolio immediately (inside the symbol loop)."""
         config = _config(tmp_path)
-        # Only BTCUSDT returns a fill
         btc_entry = _make_entry(fill_price="60000", fill_qty="0.001")
         entries = {Symbol.BTCUSDT: btc_entry}
         pipeline, runner_ref = _single_cycle_pipeline(entries=entries)
@@ -253,14 +253,15 @@ class TestPortfolioSaveOnFill:
             mock_store.save = MagicMock()
             await runner.start()
 
-        mock_store.save.assert_called_once_with(
-            portfolio, config.portfolio_state_path
-        )
+        # Called at least once: the inline fill save + the end-of-cycle save
+        assert mock_store.save.call_count >= 1
+        mock_store.save.assert_any_call(portfolio, config.portfolio_state_path)
 
     @pytest.mark.asyncio
-    async def test_no_fill_does_not_save_portfolio(self, tmp_path):
+    async def test_portfolio_saved_at_end_of_every_cycle(self, tmp_path):
+        """Portfolio is saved at the end of every cycle even with no fills."""
         config = _config(tmp_path)
-        pipeline, runner_ref = _single_cycle_pipeline()  # all entries have no fill
+        pipeline, runner_ref = _single_cycle_pipeline()  # no fills
         portfolio = _make_portfolio()
         runner = BotRunner(config=config, pipeline=pipeline, portfolio=portfolio)
         runner_ref.append(runner)
@@ -269,7 +270,7 @@ class TestPortfolioSaveOnFill:
             mock_store.save = MagicMock()
             await runner.start()
 
-        mock_store.save.assert_not_called()
+        mock_store.save.assert_called_with(portfolio, config.portfolio_state_path)
 
 
 # ── Error handling ─────────────────────────────────────────────────────────────

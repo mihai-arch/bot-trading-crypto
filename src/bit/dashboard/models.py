@@ -12,6 +12,7 @@ or an empty list. Callers must handle None.
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -88,13 +89,21 @@ class FillRow(BaseModel):
 
 
 class PortfolioSummary(BaseModel):
-    """Snapshot of the in-memory paper portfolio."""
+    """Snapshot of the paper portfolio — from live tracker or persisted file."""
 
     total_equity_usdt: Decimal
     available_usdt: Decimal
     realized_pnl_usdt: Decimal
     open_position_count: int
     is_persistent: bool = False     # False = in-memory only; state resets on restart
+    data_source: Literal["live", "persisted"] | None = None
+    """
+    "live"      — data from an injected in-memory PaperPortfolioTracker (real-time).
+    "persisted" — data loaded from portfolio_state.json written by the bot process.
+    None        — no data available (no tracker and no valid state file).
+    """
+    saved_at: datetime | None = None
+    """Set only when data_source == "persisted"; the timestamp of the last save."""
 
 
 class RiskConfig(BaseModel):

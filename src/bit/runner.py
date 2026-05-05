@@ -199,6 +199,11 @@ class BotRunner:
             update["last_successful_cycle"] = cycle_end
         self._write(**update)
 
+        # Always persist portfolio at cycle end so saved_at stays current.
+        # This ensures the dashboard can show "data as of N seconds ago" even
+        # between fills (when positions don't change but the timestamp matters).
+        self._save_portfolio()
+
     def _save_portfolio(self) -> None:
         """Persist portfolio state to disk; logs but never raises on failure."""
         try:

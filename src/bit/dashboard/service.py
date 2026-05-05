@@ -136,13 +136,23 @@ def _build_runtime_gaps(
 
     # ── Portfolio ─────────────────────────────────────────────────────────────
     if portfolio is None:
-        gaps.append(RuntimeGap(
-            label="Portfolio tracker not injected into dashboard",
-            detail=(
-                "Dashboard started without a shared PaperPortfolioTracker instance. "
-                "Portfolio section shows N/A. Pass the tracker via create_app()."
-            ),
-        ))
+        if portfolio_persistence_status == "ok":
+            gaps.append(RuntimeGap(
+                label="Portfolio data from persisted snapshot",
+                detail=(
+                    "No live tracker injected. Dashboard reads portfolio_state.json "
+                    "written by the bot after each cycle. Data reflects the last saved "
+                    "state. Pass the tracker via create_app() for real-time data."
+                ),
+            ))
+        else:
+            gaps.append(RuntimeGap(
+                label="Portfolio tracker not injected into dashboard",
+                detail=(
+                    "Dashboard started without a shared PaperPortfolioTracker instance. "
+                    "Portfolio section shows N/A. Pass the tracker via create_app()."
+                ),
+            ))
     elif portfolio_persistence_status == "ok":
         gaps.append(RuntimeGap(
             label="Portfolio state persisted (in-memory + disk)",
@@ -258,6 +268,7 @@ class DashboardService:
         positions: list[PositionRow] = []
 
         if self._portfolio is not None:
+            # Live in-memory tracker is injected — real-time data.
             snap = self._portfolio.snapshot()
             portfolio_summary = PortfolioSummary(
                 total_equity_usdt=snap.total_equity_usdt,
@@ -265,6 +276,7 @@ class DashboardService:
                 realized_pnl_usdt=snap.realized_pnl_usdt,
                 open_position_count=len(snap.open_positions),
                 is_persistent=portfolio_persistence_status == "ok",
+                data_source="live",
             )
             positions = [
                 PositionRow(
@@ -276,6 +288,34 @@ class DashboardService:
                 )
                 for pos in snap.open_positions.values()
             ]
+        else:
+            # No live tracker (separate process) — fall back to persisted file.
+            load_result = PortfolioStateStore.load(
+                self._config.portfolio_state_path,
+                starting_cash=self._config.capital_usdt,
+            )
+            if load_result.status == "ok" and load_result.tracker is not None:
+                snap = load_result.tracker.snapshot(load_result.mark_prices or None)
+                portfolio_summary = PortfolioSummary(
+                    total_equity_usdt=snap.total_equity_usdt,
+                    available_usdt=snap.available_usdt,
+                    realized_pnl_usdt=snap.realized_pnl_usdt,
+                    open_position_count=len(snap.open_positions),
+                    is_persistent=True,
+                    data_source="persisted",
+                    saved_at=load_result.saved_at,
+                )
+                positions = [
+                    PositionRow(
+                        symbol=str(pos.symbol),
+                        qty=pos.qty,
+                        avg_entry_price=pos.avg_entry_price,
+                        mark_price=None,        # no live ticker feed in v1
+                        unrealized_pnl=None,    # requires mark price
+                    )
+                    for pos in snap.open_positions.values()
+                ]
+            # If corrupt or not_found: portfolio_summary stays None — honest N/A.
 
         # ── Runner state ──────────────────────────────────────────────────────
         runner_state_snapshot: RunnerStateSnapshot | None = None
