@@ -76,6 +76,43 @@ class TestRiskEngineRejections:
         assert not result.approved
         assert result.rejection_reason is not None
 
+    def test_rejects_enter_when_symbol_already_open(self, config, btc_instrument):
+        """ENTER for a symbol that already has an open position must be rejected."""
+        portfolio = PortfolioState(
+            total_equity_usdt=Decimal("500"),
+            available_usdt=Decimal("400"),
+            open_positions={
+                Symbol.BTCUSDT: Position(
+                    symbol=Symbol.BTCUSDT,
+                    qty=Decimal("0.001"),
+                    avg_entry_price=Decimal("60000"),
+                    unrealized_pnl_usdt=Decimal("0"),
+                )
+            },
+        )
+        engine = RiskEngine(config)
+        result = engine.approve(_enter_decision(Symbol.BTCUSDT), portfolio, btc_instrument)
+        assert not result.approved
+        assert "already open" in result.rejection_reason
+
+    def test_allows_enter_for_different_symbol_when_other_open(self, config, btc_instrument):
+        """ENTER for a symbol with no open position is allowed even if another symbol is open."""
+        portfolio = PortfolioState(
+            total_equity_usdt=Decimal("500"),
+            available_usdt=Decimal("400"),
+            open_positions={
+                Symbol.ETHUSDT: Position(
+                    symbol=Symbol.ETHUSDT,
+                    qty=Decimal("0.05"),
+                    avg_entry_price=Decimal("3000"),
+                    unrealized_pnl_usdt=Decimal("0"),
+                )
+            },
+        )
+        engine = RiskEngine(config)
+        result = engine.approve(_enter_decision(Symbol.BTCUSDT), portfolio, btc_instrument)
+        assert result.approved
+
     def test_rejects_max_positions_reached(self, config, btc_instrument):
         """Fill all 3 position slots — next approval should be rejected."""
         positions = {

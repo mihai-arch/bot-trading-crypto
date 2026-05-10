@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from ..config import BITConfig
 from ..domain.decisions import Decision
-from ..domain.enums import OrderSide
+from ..domain.enums import OrderSide, Symbol
 from ..domain.execution import Fill
 from ..domain.risk import SizingResult
 
@@ -70,6 +70,39 @@ class ExecutionEngine:
             symbol=sizing.symbol,
             side=OrderSide.BUY,
             filled_qty=sizing.qty,
+            avg_fill_price=fill_price,
+            fee_usdt=fee,
+            slippage_usdt=slippage_cost,
+            filled_at=datetime.now(tz=timezone.utc),
+            is_paper=True,
+        )
+
+    def execute_exit_paper(
+        self, symbol: Symbol, qty: Decimal, current_price: Decimal
+    ) -> Fill:
+        """
+        Simulate a SELL market fill for exiting an open position.
+
+        Slippage is adverse for a sell (fill price below current price).
+        Fee is applied to the filled sell notional.
+
+        Raises:
+            NotImplementedError: If paper_trading=False (live exit not in v1).
+        """
+        if not self._config.paper_trading:
+            raise NotImplementedError(
+                "Live exit execution is not implemented in v1. "
+                "Set paper_trading=True in your configuration."
+            )
+        slippage_factor = Decimal("1") - self._config.paper_slippage_pct
+        fill_price = current_price * slippage_factor
+        fee = qty * fill_price * self._config.paper_fee_rate
+        slippage_cost = qty * (current_price - fill_price)
+        return Fill(
+            order_id=str(uuid4()),
+            symbol=symbol,
+            side=OrderSide.SELL,
+            filled_qty=qty,
             avg_fill_price=fill_price,
             fee_usdt=fee,
             slippage_usdt=slippage_cost,

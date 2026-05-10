@@ -26,9 +26,13 @@ class JournalEntry(BaseModel):
     rationale: str
     """Full rationale string from DecisionEngine."""
     fill_price: Decimal | None = None
-    """Populated if execution occurred (ENTER + approved + filled)."""
+    """Populated if execution occurred (ENTER + approved + filled, or EXIT)."""
     fill_qty: Decimal | None = None
     fee_usdt: Decimal | None = None
     is_paper: bool = True
     raw_signal_scores: dict[str, float] = {}
     """strategy_id → score float for quick analysis."""
+    exit_reason: str | None = None
+    """Populated for EXIT entries: 'stop_loss', 'take_profit', or 'signal_deterioration'."""
+    order_side: str | None = None
+    """'Buy' or 'Sell'. None means legacy implied-BUY. Populated for EXIT entries."""

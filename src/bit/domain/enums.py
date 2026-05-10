@@ -27,6 +27,7 @@ class DecisionState(StrEnum):
     ENTER = "ENTER"      # All conditions met; RiskEngine approval required before execution.
     MONITOR = "MONITOR"  # Setup forming; no action this cycle.
     REJECT = "REJECT"    # Conditions not met or risk denied; log reason and skip.
+    EXIT = "EXIT"        # Open position exited (stop-loss, take-profit, or signal deterioration).
 
 
 class OrderSide(StrEnum):

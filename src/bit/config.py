@@ -99,3 +99,17 @@ class BITConfig(BaseSettings):
         default=Decimal("0.40"),
         description="Composite score at or above which DecisionEngine emits MONITOR.",
     )
+
+    # ── Exit thresholds ───────────────────────────────────────────────────────
+    stop_loss_pct: Decimal = Field(
+        default=Decimal("0.05"),
+        description="Price decline fraction from avg entry that triggers a stop-loss exit (0.05 = 5%).",
+    )
+    take_profit_pct: Decimal = Field(
+        default=Decimal("0.10"),
+        description="Price gain fraction from avg entry that triggers a take-profit exit (0.10 = 10%).",
+    )
+    exit_score_threshold: Decimal = Field(
+        default=Decimal("0.30"),
+        description="Signal score at or below which a signal-deterioration exit is triggered.",
+    )

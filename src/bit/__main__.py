@@ -19,6 +19,7 @@ from .runner import BotRunner
 from .services.credential_check import check_credentials
 from .services.decision_engine import DecisionEngine
 from .services.execution_engine import ExecutionEngine
+from .services.exit_evaluator import ExitEvaluator
 from .services.feature_engine import FeatureEngine
 from .services.journal import JournalLearningStore
 from .services.market_data import MarketDataService
@@ -85,6 +86,8 @@ def _build_runner(config: BITConfig) -> BotRunner:
     execution_engine = ExecutionEngine(config=config)
     journal = JournalLearningStore(config=config)
 
+    exit_evaluator = ExitEvaluator(config=config)
+
     pipeline = Pipeline(
         config=config,
         market_data=market_data,
@@ -95,6 +98,7 @@ def _build_runner(config: BITConfig) -> BotRunner:
         execution_engine=execution_engine,
         journal=journal,
         portfolio_tracker=portfolio,
+        exit_evaluator=exit_evaluator,
     )
 
     # Credential checker: called once at startup if credentials are configured.

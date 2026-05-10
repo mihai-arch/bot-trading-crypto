@@ -103,6 +103,41 @@ class TestPaperExecution:
         assert len(fill.order_id) > 0
 
 
+class TestExitPaperExecution:
+    def test_exit_fill_side_is_sell(self, config):
+        engine = ExecutionEngine(config)
+        fill = engine.execute_exit_paper(Symbol.BTCUSDT, Decimal("0.001"), Decimal("60000"))
+        assert fill.side == OrderSide.SELL
+
+    def test_exit_fill_price_is_below_current_price(self, config):
+        """Adverse slippage for a SELL — fill below current price."""
+        engine = ExecutionEngine(config)
+        current_price = Decimal("60000")
+        fill = engine.execute_exit_paper(Symbol.BTCUSDT, Decimal("0.001"), current_price)
+        assert fill.avg_fill_price < current_price
+
+    def test_exit_fill_fee_positive(self, config):
+        engine = ExecutionEngine(config)
+        fill = engine.execute_exit_paper(Symbol.BTCUSDT, Decimal("0.001"), Decimal("60000"))
+        assert fill.fee_usdt > 0
+
+    def test_exit_raises_not_implemented_in_live_mode(self):
+        live_config = BITConfig(paper_trading=False)
+        engine = ExecutionEngine(live_config)
+        with pytest.raises(NotImplementedError):
+            engine.execute_exit_paper(Symbol.BTCUSDT, Decimal("0.001"), Decimal("60000"))
+
+    def test_exit_fill_is_paper(self, config):
+        engine = ExecutionEngine(config)
+        fill = engine.execute_exit_paper(Symbol.BTCUSDT, Decimal("0.001"), Decimal("60000"))
+        assert fill.is_paper is True
+
+    def test_exit_fill_qty_matches_argument(self, config):
+        engine = ExecutionEngine(config)
+        fill = engine.execute_exit_paper(Symbol.BTCUSDT, Decimal("0.005"), Decimal("60000"))
+        assert fill.filled_qty == Decimal("0.005")
+
+
 class TestLiveExecutionGuard:
     async def test_live_raises_not_implemented(self):
         """Live execution must raise NotImplementedError in v1."""

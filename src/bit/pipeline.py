@@ -17,11 +17,14 @@ Call `pipeline.run(symbol)` once per tick or on a schedule.
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from decimal import Decimal
+
 from .config import BITConfig
 from .domain.enums import DecisionState, Symbol
 from .domain.journal import JournalEntry
 from .services.decision_engine import DecisionEngine
 from .services.execution_engine import ExecutionEngine
+from .services.exit_evaluator import ExitEvaluator
 from .services.feature_engine import FeatureEngine
 from .services.journal import JournalLearningStore
 from .services.market_data import MarketDataService
@@ -49,6 +52,7 @@ class Pipeline:
         execution_engine: ExecutionEngine,
         journal: JournalLearningStore,
         portfolio_tracker: PaperPortfolioTracker,
+        exit_evaluator: ExitEvaluator | None = None,
     ) -> None:
         self._config = config
         self._market_data = market_data
@@ -59,6 +63,7 @@ class Pipeline:
         self._execution = execution_engine
         self._journal = journal
         self._portfolio = portfolio_tracker
+        self._exit_evaluator = exit_evaluator
 
     async def run(self, symbol: Symbol) -> JournalEntry:
         """
@@ -85,6 +90,41 @@ class Pipeline:
 
         # ── Step 3: Evaluate strategies → aggregated signal ──────────────────
         agg = self._signals.evaluate(features)
+        signal_score = agg.selected.score if agg.selected else Decimal("0")
+
+        # ── Step 3.5: Exit check (open positions only) ────────────────────────
+        if self._exit_evaluator and symbol in portfolio.open_positions:
+            position = portfolio.open_positions[symbol]
+            exit_dec = self._exit_evaluator.evaluate(
+                position, ticker.last_price, signal_score
+            )
+            if exit_dec:
+                fill = self._execution.execute_exit_paper(
+                    symbol, position.qty, ticker.last_price
+                )
+                self._portfolio.apply_fill(fill)
+                entry = JournalEntry(
+                    entry_id=str(uuid4()),
+                    symbol=symbol,
+                    cycle_timestamp=datetime.now(tz=timezone.utc),
+                    decision_state=DecisionState.EXIT,
+                    contributing_strategies=[
+                        s.strategy_id for s in agg.all_signals if s.score > 0
+                    ],
+                    composite_score=signal_score,
+                    rationale=f"EXIT:{exit_dec.reason} price={ticker.last_price}",
+                    fill_price=fill.avg_fill_price,
+                    fill_qty=fill.filled_qty,
+                    fee_usdt=fill.fee_usdt,
+                    is_paper=self._config.paper_trading,
+                    raw_signal_scores={
+                        s.strategy_id: float(s.score) for s in agg.all_signals
+                    },
+                    exit_reason=exit_dec.reason,
+                    order_side="Sell",
+                )
+                self._journal.record(entry)
+                return entry
 
         # ── Step 4: Select candidate → decision ───────────────────────────────
         decision = self._decisions.decide(agg)

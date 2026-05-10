@@ -53,6 +53,15 @@ class RiskEngine:
                 f"Max open positions reached ({open_count}/{self._config.max_open_positions}).",
             )
 
+        # Rule 1b: No re-entry into a symbol that already has an open position.
+        # v1 holds one position per symbol at a time; re-entry requires exit first.
+        if decision.symbol in portfolio.open_positions:
+            return self._reject(
+                decision,
+                instrument,
+                f"Position already open for {decision.symbol}. Exit the existing position first.",
+            )
+
         # Rule 2: Max capital per position.
         max_notional = portfolio.available_usdt * self._config.max_position_pct
 
