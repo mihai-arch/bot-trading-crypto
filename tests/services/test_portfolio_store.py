@@ -21,10 +21,7 @@ Verifies:
 
 import json
 from decimal import Decimal
-from pathlib import Path
 from uuid import uuid4
-
-import pytest
 
 from bit.domain.enums import OrderSide, Symbol
 from bit.domain.execution import Fill
@@ -97,7 +94,7 @@ class TestSave:
         data = json.loads(path.read_text())
         assert "BTCUSDT" in data["positions"]
         assert Decimal(data["positions"]["BTCUSDT"]["qty"]) == Decimal("0.001")
-        assert Decimal(data["positions"]["BTCUSDT"]["avg_entry_price"]) == Decimal("60000")
+        assert Decimal(data["positions"]["BTCUSDT"]["avg_entry_price"]) == Decimal("60060")
 
     def test_saves_mark_prices(self, tmp_path):
         tracker = _make_tracker()
@@ -189,7 +186,7 @@ class TestLoad:
         snap = result.tracker.snapshot()
         pos = snap.open_positions[Symbol.BTCUSDT]
         assert pos.qty == Decimal("0.001")
-        assert pos.avg_entry_price == Decimal("60000")
+        assert pos.avg_entry_price == Decimal("60060")
 
     def test_restores_mark_prices(self, tmp_path):
         tracker = _make_tracker()

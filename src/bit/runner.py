@@ -163,6 +163,15 @@ class BotRunner:
 
     async def _run_cycle(self) -> None:
         """Run one evaluation cycle for each configured symbol."""
+        if self._config.stop_file.exists():
+            logger.warning(
+                "STOP file found at %s — halting the runner. No further orders will be sent.",
+                self._config.stop_file,
+            )
+            self._stop_event.set()
+            self._write(status=RunnerStatus.STOPPING, last_error="STOP file present")
+            return
+
         cycle_start = _now()
         self._write(
             status=RunnerStatus.RUNNING,

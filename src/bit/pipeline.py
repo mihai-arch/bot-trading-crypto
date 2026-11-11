@@ -15,9 +15,8 @@ Call `pipeline.run(symbol)` once per tick or on a schedule.
 """
 
 from datetime import datetime, timezone
-from uuid import uuid4
-
 from decimal import Decimal
+from uuid import uuid4
 
 from .config import BITConfig
 from .domain.enums import DecisionState, Symbol
@@ -75,9 +74,11 @@ class Pipeline:
         from .domain.enums import Timeframe
 
         # ── Step 1: Fetch market data ─────────────────────────────────────────
-        klines_5m = await self._market_data.get_klines(symbol, Timeframe.M5)
-        klines_15m = await self._market_data.get_klines(symbol, Timeframe.M15)
-        klines_1h = await self._market_data.get_klines(symbol, Timeframe.H1)
+        # 1000 candles covers EMA warmup. The Bybit cap is 1000 per request.
+        history = max(self._config.kline_limit, 1000)
+        klines_5m = await self._market_data.get_klines(symbol, Timeframe.M5, limit=history)
+        klines_15m = await self._market_data.get_klines(symbol, Timeframe.M15, limit=history)
+        klines_1h = await self._market_data.get_klines(symbol, Timeframe.H1, limit=history)
         ticker = await self._market_data.get_ticker(symbol)
         instrument = await self._market_data.get_instrument_filter(symbol)
 
@@ -102,7 +103,6 @@ class Pipeline:
                 fill = self._execution.execute_exit_paper(
                     symbol, position.qty, ticker.last_price
                 )
-                self._portfolio.apply_fill(fill)
                 entry = JournalEntry(
                     entry_id=str(uuid4()),
                     symbol=symbol,
@@ -124,6 +124,7 @@ class Pipeline:
                     order_side="Sell",
                 )
                 self._journal.record(entry)
+                self._portfolio.apply_fill(fill)
                 return entry
 
         # ── Step 4: Select candidate → decision ───────────────────────────────
@@ -140,13 +141,21 @@ class Pipeline:
         sizing = None
         if decision.state == DecisionState.ENTER:
             sizing = self._risk.approve(decision, portfolio, instrument)
-            if sizing.approved:
+            if not sizing.approved:
+                # The signal fired, but risk rejected it. Journal the rejection,
+                # not an ENTER that never traded.
+                decision = decision.model_copy(
+                    update={
+                        "state": DecisionState.REJECT,
+                        "rationale": (
+                            f"REJECT: {sizing.rejection_reason} | signal: {decision.rationale}"
+                        ),
+                    }
+                )
+            else:
                 fill = await self._execution.execute(sizing, decision)
-                # Apply the fill to the portfolio tracker so state is current
-                # before the next cycle evaluates risk.
-                self._portfolio.apply_fill(fill)
 
-        # ── Step 7: Journal ───────────────────────────────────────────────────
+        # ── Step 7: Journal, then apply the fill ─────────────────────────────
         entry = JournalEntry(
             entry_id=str(uuid4()),
             symbol=symbol,
@@ -162,4 +171,6 @@ class Pipeline:
             raw_signal_scores={s.strategy_id: float(s.score) for s in agg.all_signals},
         )
         self._journal.record(entry)
+        if fill is not None:
+            self._portfolio.apply_fill(fill)
         return entry

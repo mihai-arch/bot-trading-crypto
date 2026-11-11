@@ -19,21 +19,15 @@ Direction: **Long-only**
 
 ## 2. Current Status
 
-> **v1 foundation complete. Phase 2 (MarketDataService) is next.**
+> **Paper blend is the default. Live orders stay disabled.**
 
-- Project structure, tooling, and docs are initialized.
-- All domain models and typed schemas are defined.
-- Service skeletons exist with honest stubs (raise `NotImplementedError`).
-- `DecisionEngine` and `RiskEngine` are fully implemented (deterministic logic only).
-- `ExecutionEngine` paper mode is implemented. Live mode raises `NotImplementedError`.
-- `JournalLearningStore` (JSONL) is implemented.
-- `Pipeline` orchestrator is wired but depends on `FeatureEngine`.
-- `MarketDataService` is implemented: `get_klines`, `get_ticker`, `get_instrument_filter`.
-- `bit.bybit.client.BybitRestClient` — thin async HTTP layer with injectable transport.
-- `bit.bybit.parsers` — pure parsing functions, fully unit-tested.
-- Test structure exists; all deterministic services and parsers have passing tests.
+- Default strategy is the 50/50 blend: daily core rotation of BTC/ETH/SOL plus a 4h EMA(20)/EMA(100) sleeve with a 40% vol target. `STRATEGY_MODE=legacy` keeps the old 15m checklist.
+- Paper runner (`python -m bit.paper`) uses public Bybit klines only, starts at 1000 USDT, and persists sleeves in `data/blend_state.json`.
+- Risk limits: -25% from the stage start (latched halt), 3% UTC-day loss, 6 consecutive losing round-trips, and a `data/STOP` kill file.
+- Buy fees are in the cost basis. Breakout `high_20` excludes the current bar. Kline requests ask for 1000 candles.
+- `backtest/` replays the blend on cached klines. The legacy checklist remains selectable and is not the default.
 
-**Next:** Implement `FeatureEngine` (indicators) → Strategies → paper portfolio tracker.
+**Next:** Paper-trade the blend and compare its trade frequency with the backtest before any further strategy work.
 
 ---
 

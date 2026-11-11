@@ -24,8 +24,8 @@ class KlineFeatures(BaseModel):
     atr: Decimal | None = None         # ATR(14); absolute price units
     volume_ma: Decimal | None = None   # SMA(20) of volume
     current_volume: Decimal | None = None
-    high_20: Decimal | None = None     # Highest high over last 20 bars
-    low_20: Decimal | None = None      # Lowest low over last 20 bars
+    high_20: Decimal | None = None     # Highest high of the prior 20 bars, current bar excluded
+    low_20: Decimal | None = None      # Lowest low of the prior 20 bars, current bar excluded
     current_close: Decimal | None = None
     # Derived values — pre-computed for strategy convenience
     relative_volume: Decimal | None = None   # current_volume / volume_ma; >1.0 = above-average activity

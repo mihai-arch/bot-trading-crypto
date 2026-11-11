@@ -25,12 +25,10 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
-
 from bit.config import BITConfig
 from bit.dashboard.models import ReadinessStatus, ServiceStatus
 from bit.dashboard.service import DashboardService
-from bit.domain.enums import DecisionState, OrderSide, OrderStatus, StrategyId, Symbol
+from bit.domain.enums import DecisionState, OrderSide, StrategyId, Symbol
 from bit.domain.execution import Fill
 from bit.domain.journal import JournalEntry
 from bit.services.journal import JournalLearningStore
@@ -130,7 +128,6 @@ class TestBuildSnapshotBasic:
         assert "ETHUSDT" in snap.symbols
 
     def test_as_of_is_recent_utc(self, tmp_path):
-        from datetime import timedelta
         service = _make_service(tmp_path)
         snap = service.build_snapshot()
         now = datetime.now(tz=timezone.utc)
@@ -280,7 +277,8 @@ class TestPortfolio:
         pos = snap.open_positions[0]
         assert pos.symbol == "BTCUSDT"
         assert pos.qty == Decimal("0.001")
-        assert pos.avg_entry_price == Decimal("60000")
+        # 0.001 * 60000 + 0.06 fee, divided by 0.001. Buy fee is in the cost basis.
+        assert pos.avg_entry_price == Decimal("60060")
 
     def test_open_position_mark_price_is_none(self, tmp_path):
         tracker = PaperPortfolioTracker(starting_cash=Decimal("500"))
@@ -326,7 +324,7 @@ class TestRiskConfig:
     def test_risk_config_from_bit_config(self, tmp_path):
         service = _make_service(tmp_path)
         rc = service.build_snapshot().risk_config
-        assert rc.capital_usdt == Decimal("500")
+        assert rc.capital_usdt == Decimal("1000")
         assert rc.max_position_pct == Decimal("0.20")
         assert rc.max_open_positions == 3
         assert rc.enter_threshold == Decimal("0.65")
@@ -450,7 +448,6 @@ class TestRunnerStatePersistence:
         """loop_running stays True for files up to run_interval_seconds + 60 seconds old."""
         import os
         import time
-        from datetime import timedelta
         cfg = _config(tmp_path=tmp_path, run_interval_seconds=300)
         state = RunnerState(updated_at=_TS_BASE, status=RunnerStatus.RUNNING)
         state_path = tmp_path / "runner_state.json"

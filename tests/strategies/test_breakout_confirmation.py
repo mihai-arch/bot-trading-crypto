@@ -5,7 +5,7 @@ Test organisation:
   TestFullBreakout            — all 5 conditions met; score == 1.0
   TestMissingFeatureData      — each condition individually missing (None) → not met
   TestH1Consolidation         — C1: range too wide, boundary
-  TestBreakoutProximity       — C2: close far from high_20, exact boundary
+  TestPriorHighBreakout       — C2: close must exceed the prior 20-bar high
   TestVolumeConfirmation      — C3: volume below threshold, exact boundary
   TestRSIConditions           — C4: RSI below min, above max, boundary values
   TestExtensionGuard          — C5: price overextended, boundary
@@ -19,12 +19,9 @@ Test organisation:
 from datetime import datetime, timezone
 from decimal import Decimal
 
-import pytest
-
 from bit.domain.enums import StrategyId, Symbol, Timeframe
 from bit.domain.features import FeatureSet, KlineFeatures
 from bit.strategies.breakout_confirmation import BreakoutConfirmationStrategy
-
 
 _NOW = datetime(2024, 6, 1, tzinfo=timezone.utc)
 _STRATEGY = BreakoutConfirmationStrategy()
@@ -53,8 +50,8 @@ def _h1(
 
 def _m15(
     *,
-    high_20: Decimal | None = Decimal("60100"),
-    current_close: Decimal | None = Decimal("60020"),  # gap 0.133% < 0.3% ✓
+    high_20: Decimal | None = Decimal("60000"),
+    current_close: Decimal | None = Decimal("60100"),  # close above the prior high ✓
     relative_volume: Decimal | None = Decimal("2.0"),   # 2.0x ≥ 1.5 ✓
     rsi: Decimal | None = Decimal("62"),                # in [55, 80] ✓
     ema_distance_pct: Decimal | None = Decimal("3.0"),  # ≤ 6.0% ✓
@@ -91,7 +88,7 @@ def _feature_set(
         h1=h1 if h1 is not None else _h1(),
         m15=m15 if m15 is not None else _m15(),
         m5=m5 if m5 is not None else _m5(),
-        last_price=Decimal("60020"),
+        last_price=Decimal("60100"),
     )
 
 
@@ -218,36 +215,28 @@ class TestH1Consolidation:
         assert sig.score == Decimal("1.0") - Decimal("0.20")
 
 
-class TestBreakoutProximity:
-    """C2: close proximity to 20-bar high."""
+class TestPriorHighBreakout:
+    """C2: close must be strictly above the prior 20-bar high."""
 
-    def test_close_far_below_resistance_fails(self):
-        # gap = 2% > 0.3%
+    def test_close_below_prior_high_fails(self):
         sig = _STRATEGY.evaluate(
             _feature_set(m15=_m15(high_20=Decimal("61000"), current_close=Decimal("59780")))
         )
         assert not sig.metadata["conditions"]["c2_m15_breakout"]
         assert "C2 FAIL" in sig.rationale
 
-    def test_gap_exactly_at_threshold_passes(self):
-        # gap == 0.3% exactly → <= threshold → passes
-        high = Decimal("60000")
-        close = high * (1 - Decimal("0.003"))  # exactly 0.3% below
-        sig = _STRATEGY.evaluate(_feature_set(m15=_m15(high_20=high, current_close=close)))
-        assert sig.metadata["conditions"]["c2_m15_breakout"]
-
-    def test_gap_just_above_threshold_fails(self):
-        # gap = 0.301% > 0.3%
-        high = Decimal("60000")
-        close = high * (1 - Decimal("0.00301"))
-        sig = _STRATEGY.evaluate(_feature_set(m15=_m15(high_20=high, current_close=close)))
-        assert not sig.metadata["conditions"]["c2_m15_breakout"]
-
-    def test_close_equal_to_high_20_passes(self):
-        # gap = 0% → trivially within zone
+    def test_close_equal_to_prior_high_fails(self):
         high = Decimal("60000")
         sig = _STRATEGY.evaluate(_feature_set(m15=_m15(high_20=high, current_close=high)))
+        assert not sig.metadata["conditions"]["c2_m15_breakout"]
+
+    def test_close_above_prior_high_passes(self):
+        high = Decimal("60000")
+        sig = _STRATEGY.evaluate(
+            _feature_set(m15=_m15(high_20=high, current_close=high + Decimal("1")))
+        )
         assert sig.metadata["conditions"]["c2_m15_breakout"]
+        assert "C2 MET" in sig.rationale
 
     def test_c2_fail_reduces_score(self):
         sig = _STRATEGY.evaluate(
