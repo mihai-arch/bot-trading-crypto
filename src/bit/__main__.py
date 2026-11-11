@@ -84,7 +84,7 @@ def _build_runner(config: BITConfig) -> BotRunner:
     decision_engine = DecisionEngine(config=config)
     risk_engine = RiskEngine(config=config)
     execution_engine = ExecutionEngine(config=config)
-    journal = JournalLearningStore(config=config)
+    journal = JournalLearningStore(config=config, journal_path=config.journal_path)
 
     exit_evaluator = ExitEvaluator(config=config)
 
@@ -115,8 +115,8 @@ def _build_runner(config: BITConfig) -> BotRunner:
     )
 
 
-async def _main() -> None:
-    config = BITConfig()
+async def _run_legacy(config: BITConfig) -> None:
+    logger.info("strategy_mode=legacy — trend continuation and breakout confirmation.")
     runner = _build_runner(config)
     try:
         await runner.start()
@@ -124,5 +124,27 @@ async def _main() -> None:
         await runner.stop()
 
 
+def main() -> None:
+    """Dispatch to the paper blend (default) or the legacy checklist."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    if "--reset-halt" in sys.argv:
+        from .paper import main as paper_main
+
+        paper_main()
+        return
+    config = BITConfig()
+    if config.strategy_mode == "blend":
+        logger.info("strategy_mode=blend — starting the paper-only blend runner.")
+        from .paper import main as paper_main
+
+        paper_main()
+        return
+    asyncio.run(_run_legacy(config))
+
+
 if __name__ == "__main__":
-    asyncio.run(_main())
+    main()

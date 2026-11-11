@@ -19,7 +19,6 @@ All indicator helpers return None when there is insufficient history, letting
 strategies handle the absence of data explicitly rather than silently.
 """
 
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from ..domain.enums import Symbol, Timeframe
@@ -40,8 +39,8 @@ class FeatureEngine:
     - RSI(14): 15 bars (14 periods of price changes)
     - ATR(14): 15 bars (14 true ranges, each needing a prior close)
     - Volume SMA(20): 20 bars
-    - 20-bar high/low: 20 bars
-    Recommended: pass at least 60 closed klines per timeframe.
+    - Prior 20-bar high/low: 21 closed bars (the current bar is excluded)
+    Recommended: pass at least 1000 closed klines per timeframe.
     """
 
     def compute(
@@ -119,8 +118,15 @@ class FeatureEngine:
         current_close = closes[-1]
         current_volume = volumes[-1]
 
-        high_20 = max(highs[-20:]) if len(highs) >= 20 else None
-        low_20 = min(lows[-20:]) if len(lows) >= 20 else None
+        # Prior 20-bar high/low, excluding the bar that just closed.
+        # Including the current high makes "close > high_20" impossible and
+        # turns a breakout test into a look at the candle's own wick.
+        if len(highs) >= 21:
+            high_20 = max(highs[-21:-1])
+            low_20 = min(lows[-21:-1])
+        else:
+            high_20 = None
+            low_20 = None
 
         # Derived: relative volume (how current bar compares to average).
         relative_volume: Decimal | None = None

@@ -42,14 +42,16 @@ class MarketDataService:
         self,
         symbol: Symbol,
         timeframe: Timeframe,
-        limit: int = 200,
+        limit: int = 1000,
     ) -> list[Kline]:
         """
         Fetch recent klines for a symbol and timeframe.
 
         Returns up to `limit` klines sorted oldest → newest.
-        The final entry is marked is_closed=False (it may still be forming).
-        Only is_closed=True klines should be used for indicator computation.
+        The default and the Bybit cap are 1000, which covers EMA(100) and the
+        180-bar volatility window. The final entry is marked is_closed=False
+        (it may still be forming). Only is_closed=True klines should be used
+        for indicator computation.
 
         Bybit endpoint: GET /v5/market/kline
         """

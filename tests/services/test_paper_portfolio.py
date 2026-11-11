@@ -31,7 +31,6 @@ from bit.domain.execution import Fill
 from bit.domain.market import PortfolioState
 from bit.services.paper_portfolio import PaperPortfolioTracker
 
-
 # ── Test constants ────────────────────────────────────────────────────────────
 
 _NOW = datetime(2024, 6, 1, tzinfo=timezone.utc)
@@ -118,7 +117,7 @@ class TestBuyFill:
     Buy 0.001 BTC @ $60,000, fee $0.06
       cash_out = 0.001 × 60000 + 0.06 = 60.06
       remaining_cash = 500 − 60.06 = 439.94
-      position = 0.001 BTC @ avg_entry $60,000
+      cost basis = 60.06, avg_entry = 60.06 / 0.001 = $60,060
     """
 
     def setup_method(self):
@@ -140,17 +139,17 @@ class TestBuyFill:
     def test_avg_entry_price_correct(self):
         s = self.t.snapshot()
         pos = s.open_positions[Symbol.BTCUSDT]
-        assert pos.avg_entry_price == Decimal("60000")
+        assert pos.avg_entry_price == Decimal("60060")
 
     def test_available_usdt_reflects_cash(self):
         s = self.t.snapshot()
         assert s.available_usdt == self.t.cash
 
     def test_equity_at_cost_equals_cash_plus_position_value(self):
-        # Mark = avg_entry (no mark_prices provided) → unrealized PnL = 0
+        # No mark price: position is valued at the fee-inclusive cost basis.
+        # cash 439.94 + cost 60.06 = the original 500.
         s = self.t.snapshot()
-        expected_equity = self.t.cash + Decimal("0.001") * Decimal("60000")
-        assert s.total_equity_usdt == expected_equity
+        assert s.total_equity_usdt == _START
 
     def test_realized_pnl_still_zero(self):
         assert self.t.realized_pnl == Decimal("0")
@@ -158,11 +157,10 @@ class TestBuyFill:
 
 class TestSecondBuyAvgEntry:
     """
-    Buy 1: 0.001 BTC @ $60,000
-    Buy 2: 0.001 BTC @ $62,000, fee $0.062
+    Buy 1: 0.001 BTC @ $60,000, fee $0.06 → cost 60.06
+    Buy 2: 0.001 BTC @ $62,000, fee $0.062 → cost 62.062
 
-    weighted avg = (0.001×60000 + 0.001×62000) / 0.002
-                 = (60 + 62) / 0.002 = 122 / 0.002 = 61,000
+    weighted avg = (60.06 + 62.062) / 0.002 = 61,061
 
     cash after both = 500 − 60.06 − 62.062 = 377.878
     """
@@ -179,7 +177,7 @@ class TestSecondBuyAvgEntry:
     def test_weighted_average_entry_price(self):
         s = self.t.snapshot()
         pos = s.open_positions[Symbol.BTCUSDT]
-        assert pos.avg_entry_price == Decimal("61000")
+        assert pos.avg_entry_price == Decimal("61061")
 
     def test_cash_after_both_buys(self):
         # 500 - 60.06 - 62.062 = 377.878
@@ -193,14 +191,14 @@ class TestSecondBuyAvgEntry:
 class TestPartialSell:
     """
     After buying 0.001 BTC @ $60,000 (fee $0.06):
-      avg_entry = $60,000, cash = $439.94
+      avg_entry = $60,060 (fee in the cost basis), cash = $439.94
 
     Sell 0.0005 BTC @ $65,000, fee $0.0325:
-      gross_pnl  = (65000 − 60000) × 0.0005 = 5000 × 0.0005 = $2.50
-      net_pnl    = 2.50 − 0.0325 = $2.4675
-      cash_in    = 0.0005 × 65000 − 0.0325 = 32.5 − 0.0325 = $32.4675
-      new_cash   = 439.94 + 32.4675 = $472.4075
-      remaining  = 0.0005 BTC @ $60,000 (avg unchanged)
+      gross_pnl = (65000 − 60060) × 0.0005 = $2.47
+      net_pnl   = 2.47 − 0.0325 = $2.4375
+      cash_in   = 0.0005 × 65000 − 0.0325 = $32.4675
+      new_cash  = 439.94 + 32.4675 = $472.4075
+      remaining = 0.0005 BTC @ $60,060 (avg unchanged)
     """
 
     def setup_method(self):
@@ -216,14 +214,14 @@ class TestPartialSell:
 
     def test_avg_entry_price_unchanged(self):
         s = self.t.snapshot()
-        assert s.open_positions[Symbol.BTCUSDT].avg_entry_price == Decimal("60000")
+        assert s.open_positions[Symbol.BTCUSDT].avg_entry_price == Decimal("60060")
 
     def test_cash_after_partial_sell(self):
         expected = Decimal("439.94") + Decimal("32.4675")
         assert self.t.cash == expected
 
     def test_realized_pnl_recorded(self):
-        assert self.t.realized_pnl == Decimal("2.4675")
+        assert self.t.realized_pnl == Decimal("2.4375")
 
     def test_position_still_open(self):
         assert self.t.position_count == 1
@@ -232,12 +230,12 @@ class TestPartialSell:
 class TestFullExit:
     """
     After buying 0.001 BTC @ $60,000 (fee $0.06):
-      cash = $439.94
+      cash = $439.94, avg_entry = $60,060
 
     Sell all 0.001 BTC @ $65,000, fee $0.065:
-      gross_pnl = (65000 − 60000) × 0.001 = $5.00
-      net_pnl   = 5.00 − 0.065 = $4.935
-      cash_in   = 0.001 × 65000 − 0.065 = 65 − 0.065 = $64.935
+      gross_pnl = (65000 − 60060) × 0.001 = $4.94
+      net_pnl   = 4.94 − 0.065 = $4.875
+      cash_in   = 0.001 × 65000 − 0.065 = $64.935
       new_cash  = 439.94 + 64.935 = $504.875
     """
 
@@ -258,7 +256,7 @@ class TestFullExit:
         assert self.t.cash == expected
 
     def test_realized_pnl_after_full_exit(self):
-        assert self.t.realized_pnl == Decimal("4.935")
+        assert self.t.realized_pnl == Decimal("4.875")
 
     def test_equity_equals_cash_when_no_positions(self):
         s = self.t.snapshot()
@@ -323,17 +321,18 @@ class TestMarkPrices:
     def test_mark_above_entry_positive_unrealized_pnl(self):
         s = self.t.snapshot({Symbol.BTCUSDT: Decimal("62000")})
         pos = s.open_positions[Symbol.BTCUSDT]
-        # (62000 - 60000) * 0.001 = 2000 * 0.001 = $2
-        assert pos.unrealized_pnl_usdt == Decimal("2")
+        # (62000 - 60060) * 0.001 = $1.94
+        assert pos.unrealized_pnl_usdt == Decimal("1.94")
 
     def test_mark_below_entry_negative_unrealized_pnl(self):
         s = self.t.snapshot({Symbol.BTCUSDT: Decimal("58000")})
         pos = s.open_positions[Symbol.BTCUSDT]
-        # (58000 - 60000) * 0.001 = -2000 * 0.001 = -$2
-        assert pos.unrealized_pnl_usdt == Decimal("-2")
+        # (58000 - 60060) * 0.001 = -$2.06
+        assert pos.unrealized_pnl_usdt == Decimal("-2.06")
 
-    def test_mark_at_entry_zero_unrealized_pnl(self):
-        s = self.t.snapshot({Symbol.BTCUSDT: Decimal("60000")})
+    def test_mark_at_cost_basis_zero_unrealized_pnl(self):
+        # The fee-inclusive cost basis is 60060. Marking there is a flat P&L.
+        s = self.t.snapshot({Symbol.BTCUSDT: Decimal("60060")})
         assert s.open_positions[Symbol.BTCUSDT].unrealized_pnl_usdt == Decimal("0")
 
     def test_equity_reflects_mark_price(self):
@@ -349,9 +348,8 @@ class TestMarkPrices:
 
     def test_no_mark_prices_equity_is_cash_plus_cost_basis(self):
         s = self.t.snapshot()
-        # equity = cash + 0.001 * 60000 (cost basis)
-        expected = self.t.cash + Decimal("0.001") * Decimal("60000")
-        assert s.total_equity_usdt == expected
+        # equity = cash + qty * fee-inclusive avg entry = starting cash
+        assert s.total_equity_usdt == _START
 
 
 class TestSnapshot:
@@ -364,7 +362,7 @@ class TestSnapshot:
         t.apply_fill(_buy(qty="0.001", price="60000", fee="0.06"))
         t.apply_fill(_sell(qty="0.001", price="65000", fee="0.065"))
         s = t.snapshot()
-        assert s.realized_pnl_usdt == Decimal("4.935")
+        assert s.realized_pnl_usdt == Decimal("4.875")
 
     def test_snapshot_zero_realized_pnl_initially(self):
         t = _tracker()
@@ -401,13 +399,14 @@ class TestMultipleSymbols:
         s = self.t.snapshot()
         pos = s.open_positions[Symbol.BTCUSDT]
         assert pos.qty == Decimal("0.001")
-        assert pos.avg_entry_price == Decimal("60000")
+        assert pos.avg_entry_price == Decimal("60060")
 
     def test_eth_position_correct(self):
         s = self.t.snapshot()
         pos = s.open_positions[Symbol.ETHUSDT]
         assert pos.qty == Decimal("0.02")
-        assert pos.avg_entry_price == Decimal("3000")
+        # cost = 0.02 * 3000 + 0.06 = 60.06; avg = 60.06 / 0.02 = 3003
+        assert pos.avg_entry_price == Decimal("3003")
 
     def test_closing_one_leaves_other_intact(self):
         self.t.apply_fill(_sell(symbol=Symbol.BTCUSDT, qty="0.001",
@@ -420,10 +419,10 @@ class TestMultipleSymbols:
             Symbol.BTCUSDT: Decimal("61000"),
             Symbol.ETHUSDT: Decimal("3100"),
         })
-        # BTC unrealized = (61000 - 60000) * 0.001 = 1.0
-        assert s.open_positions[Symbol.BTCUSDT].unrealized_pnl_usdt == Decimal("1")
-        # ETH unrealized = (3100 - 3000) * 0.02 = 2.0
-        assert s.open_positions[Symbol.ETHUSDT].unrealized_pnl_usdt == Decimal("2")
+        # BTC unrealized = (61000 - 60060) * 0.001 = 0.94
+        assert s.open_positions[Symbol.BTCUSDT].unrealized_pnl_usdt == Decimal("0.94")
+        # ETH unrealized = (3100 - 3003) * 0.02 = 1.94
+        assert s.open_positions[Symbol.ETHUSDT].unrealized_pnl_usdt == Decimal("1.94")
 
 
 class TestRealizedPnL:
@@ -432,16 +431,16 @@ class TestRealizedPnL:
         t = _tracker()
         t.apply_fill(_buy(qty="0.001", price="60000", fee="0.06"))
         t.apply_fill(_sell(qty="0.001", price="65000", fee="0.065"))
-        # gross = (65000 - 60000) * 0.001 = 5.0; net = 5.0 - 0.065 = 4.935
-        assert t.realized_pnl == Decimal("4.935")
+        # gross = (65000 - 60060) * 0.001 = 4.94; net = 4.94 - 0.065 = 4.875
+        assert t.realized_pnl == Decimal("4.875")
 
     def test_losing_sell(self):
         """Sell below avg_entry → negative PnL."""
         t = _tracker()
         t.apply_fill(_buy(qty="0.001", price="60000", fee="0.06"))
         t.apply_fill(_sell(qty="0.001", price="55000", fee="0.055"))
-        # gross = (55000 - 60000) * 0.001 = -5.0; net = -5.0 - 0.055 = -5.055
-        assert t.realized_pnl == Decimal("-5.055")
+        # gross = (55000 - 60060) * 0.001 = -5.06; net = -5.06 - 0.055 = -5.115
+        assert t.realized_pnl == Decimal("-5.115")
 
     def test_break_even_sell(self):
         """Sell exactly at avg_entry → PnL equals negative of sell fee."""

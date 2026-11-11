@@ -8,8 +8,8 @@ Returns a Signal with a score in [0, 1] and a human-readable rationale.
 Scoring model — five binary conditions, weights sum to 1.0:
 
   C1  H1 consolidation     (h1.high_20 - h1.low_20) / h1.low_20 < RANGE_WIDTH_PCT  weight 0.20
-  C2  M15 at breakout      (m15.high_20 - m15.current_close) / m15.high_20          weight 0.30
-                             <= BREAKOUT_ZONE_PCT (close within 0.3% of 20-bar high)
+  C2  M15 breakout         m15.current_close > m15.high_20                              weight 0.30
+                             high_20 is the prior 20-bar high, current bar excluded
   C3  M15 volume spike     m15.relative_volume >= MIN_RELATIVE_VOL (1.5x)            weight 0.25
   C4  M15 momentum ok      m15.rsi in [RSI_M15_MIN, RSI_M15_OB_MAX]                  weight 0.15
   C5  M15 not extended     m15.ema_distance_pct <= EMA_DIST_MAX_PCT (6%)             weight 0.10
@@ -17,11 +17,9 @@ Scoring model — five binary conditions, weights sum to 1.0:
 score = Σ(weight_i × condition_met_i)   — all weights and conditions are explicit constants.
 
 Note on C2 (breakout detection):
-  `high_20` includes the current bar's high (max of last 20 highs), so `close > high_20`
-  is structurally impossible — the current close is always ≤ its own high ≤ high_20.
-  Instead, C2 checks whether close is within BREAKOUT_ZONE_PCT of the 20-bar high,
-  capturing candles that close near resistance with a small upper wick (strong breakout
-  character). A large gap means price is still well below the range ceiling.
+  `high_20` is the highest high of the previous 20 closed bars, not including the
+  bar being scored. C2 is true only when the close is strictly above that prior high.
+  A close that merely tags its own high is not a breakout.
 
 Conditions with unavailable feature data (None) are treated as not met and explained
 in the rationale. This is conservative: missing data means we cannot trade safely.
@@ -47,16 +45,13 @@ class BreakoutConfirmationStrategy:
 
     # ── Condition weights (must sum to exactly 1.0) ───────────────────────────
     _W_H1_CONSOLIDATION = Decimal("0.20")  # H1 prior range — context quality filter
-    _W_M15_BREAKOUT = Decimal("0.30")      # M15 close near 20-bar high — breakout character
+    _W_M15_BREAKOUT = Decimal("0.30")      # M15 close above the prior 20-bar high
     _W_M15_VOLUME = Decimal("0.25")        # M15 volume spike — confirms genuine interest
     _W_M15_MOMENTUM = Decimal("0.15")      # M15 RSI in supportive zone — not exhausted
     _W_M15_NOT_EXTENDED = Decimal("0.10")  # M15 not too far above EMA — not chasing
 
     # ── Consolidation threshold ────────────────────────────────────────────────
     _RANGE_WIDTH_PCT = Decimal("0.04")  # C1: H1 (high_20-low_20)/low_20 < 4% = consolidation
-
-    # ── Breakout proximity threshold ──────────────────────────────────────────
-    _BREAKOUT_ZONE_PCT = Decimal("0.003")  # C2: close within 0.3% of 20-bar high
 
     # ── Volume threshold ───────────────────────────────────────────────────────
     _MIN_RELATIVE_VOL = Decimal("1.5")  # C3: volume must be ≥ 150% of its 20-bar SMA
@@ -117,37 +112,31 @@ class BreakoutConfirmationStrategy:
                 )
         else:
             c1 = False
-            reasons.append("C1 MISS: H1 high_20/low_20 unavailable — need ≥20 closed bars")
+            reasons.append("C1 MISS: H1 high_20/low_20 unavailable — need ≥21 closed bars")
 
         conditions["c1_h1_consolidation"] = c1
         if c1:
             score += self._W_H1_CONSOLIDATION
 
-        # ── C2: M15 close at breakout level (weight 0.30) ────────────────────
-        # Price must close within BREAKOUT_ZONE_PCT of the 20-bar high, indicating
-        # a strong breakout candle with minimal upper wick (rejection).
-        # Note: close > high_20 is impossible since high_20 >= current bar's high >= close.
+        # ── C2: M15 close breaks the prior 20-bar high (weight 0.30) ─────────
+        # high_20 excludes the current bar, so a close above it is a real break.
         if m15.high_20 is not None and m15.current_close is not None and m15.high_20 > 0:
             feature_snapshot["m15_high_20"] = str(m15.high_20)
             feature_snapshot["m15_current_close"] = str(m15.current_close)
-            gap_pct = (m15.high_20 - m15.current_close) / m15.high_20
-            feature_snapshot["m15_breakout_gap_pct"] = str(gap_pct)
-            c2 = gap_pct <= self._BREAKOUT_ZONE_PCT
+            c2 = m15.current_close > m15.high_20
             if c2:
                 reasons.append(
-                    f"C2 MET: M15 close within breakout zone"
-                    f" — {gap_pct * 100:.3f}% below 20-bar high"
-                    f" (max {self._BREAKOUT_ZONE_PCT * 100:.1f}%)"
+                    f"C2 MET: M15 close {m15.current_close} broke above the prior 20-bar high "
+                    f"{m15.high_20}"
                 )
             else:
                 reasons.append(
-                    f"C2 FAIL: M15 close too far from resistance"
-                    f" — {gap_pct * 100:.3f}% below 20-bar high"
-                    f" (max {self._BREAKOUT_ZONE_PCT * 100:.1f}%)"
+                    f"C2 FAIL: M15 close {m15.current_close} did not break the prior 20-bar high "
+                    f"{m15.high_20}"
                 )
         else:
             c2 = False
-            reasons.append("C2 MISS: M15 high_20/current_close unavailable — need ≥20 closed bars")
+            reasons.append("C2 MISS: M15 high_20/current_close unavailable — need ≥21 closed bars")
 
         conditions["c2_m15_breakout"] = c2
         if c2:

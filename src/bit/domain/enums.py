@@ -19,6 +19,8 @@ class Timeframe(StrEnum):
     M5 = "5"
     M15 = "15"
     H1 = "60"
+    H4 = "240"
+    D1 = "D"
 
 
 class DecisionState(StrEnum):
@@ -54,3 +56,5 @@ class OrderStatus(StrEnum):
 class StrategyId(StrEnum):
     TREND_CONTINUATION = "trend_continuation"
     BREAKOUT_CONFIRMATION = "breakout_confirmation"
+    CORE_ROTATION = "core_rotation"
+    TREND_EMA_4H = "trend_ema_4h"

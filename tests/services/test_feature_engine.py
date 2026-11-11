@@ -8,8 +8,6 @@ or verify None/not-None semantics for edge cases.
 from datetime import datetime, timezone
 from decimal import Decimal
 
-import pytest
-
 from bit.domain.enums import Symbol, Timeframe
 from bit.domain.market import Kline, Ticker
 from bit.services.feature_engine import FeatureEngine
@@ -346,14 +344,21 @@ class TestComputeTimeframeFeatures:
         assert result.relative_volume is None
         assert result.ema_distance_pct is None
 
-    def test_high_20_is_max_of_last_20_highs(self):
-        # Make 25 klines with increasing closes; last 20 highs will exceed first 5.
+    def test_high_20_excludes_the_current_bar(self):
+        # 25 rising bars, then a spike on the bar that just closed.
+        # high_20 / low_20 must ignore that spike (it is the current bar).
         klines = _uniform_klines(25, close=100.0)
+        klines[-1] = _kline(close=100.0, high=9999.0, low=1.0)
         result = self.fe._compute_timeframe_features(klines, Timeframe.M5)
-        # high of last bar ≈ close(124) + 0.5 = 102.9; high of bar 5 ≈ 100.5
         assert result.high_20 is not None
         assert result.low_20 is not None
+        assert result.high_20 < Decimal("9999")
+        assert result.low_20 > Decimal("1")
         assert result.high_20 > result.low_20
+
+    def test_high_20_needs_21_bars(self):
+        assert self.fe._compute_timeframe_features(_uniform_klines(20), Timeframe.M5).high_20 is None
+        assert self.fe._compute_timeframe_features(_uniform_klines(21), Timeframe.M5).high_20 is not None
 
     def test_ema_fast_gt_slow_on_rising_series(self):
         # On a rising kline series, fast EMA must be above slow EMA.

@@ -1,5 +1,7 @@
 # BIT — 30-Day Paper Trading Runbook
 
+> The default bot is now the paper blend (`py -m bit.paper`). How to start it, stop it with `data\STOP`, and clear a halt is in the README. This runbook still describes the legacy checklist (`STRATEGY_MODE=legacy`).
+
 Operator runbook for the v1 paper trading validation run.
 This document is grounded in the repo as it exists today — no speculative infrastructure.
 

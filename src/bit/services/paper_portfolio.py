@@ -13,11 +13,12 @@ It is intentionally in-memory only (v1); for persistence wrap with a
 serialization layer or migrate to SQLite in a later phase.
 
 Fee treatment:
-  BUY  — cash out  = qty × fill_price + fee_usdt
-         avg_entry_price = weighted average of fill prices (excluding fees),
-         which is the standard cost-basis convention.
-  SELL — cash in   = qty × fill_price − fee_usdt
-         realized_pnl per trade = (fill_price − avg_entry) × qty − fee_usdt
+  BUY  — cash out = qty × fill_price + fee_usdt
+         The buy fee is added to the cost basis, so avg_entry_price is
+         (notional + buy fees) / qty. Realized P&L on the later sell is net
+         of both the buy fee and the sell fee.
+  SELL — cash in = qty × fill_price − fee_usdt
+         realized_pnl = (fill_price − avg_entry) × qty − sell fee
 
 Not thread-safe. Designed for single-threaded pipeline use.
 
@@ -33,7 +34,7 @@ from decimal import Decimal
 
 from ..domain.enums import OrderSide, Symbol
 from ..domain.execution import Fill
-from ..domain.market import Position, PortfolioState
+from ..domain.market import PortfolioState, Position
 
 _ZERO = Decimal("0")
 
@@ -165,7 +166,8 @@ class PaperPortfolioTracker:
         pos = self._positions[fill.symbol]
         old_cost_basis = pos.qty * pos.avg_entry_price
         new_qty = pos.qty + fill.filled_qty
-        new_cost_basis = old_cost_basis + fill.filled_qty * fill.avg_fill_price
+        # Buy fee stays in the cost basis so a later sell's realized P&L is net of both fees.
+        new_cost_basis = old_cost_basis + fill.filled_qty * fill.avg_fill_price + fill.fee_usdt
         pos.qty = new_qty
         pos.avg_entry_price = new_cost_basis / new_qty
 
